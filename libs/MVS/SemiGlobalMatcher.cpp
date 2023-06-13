@@ -928,11 +928,11 @@ void SemiGlobalMatcher::Match(const ViewData& leftImage, const ViewData& rightIm
 		for (int i=-halfWindowSizeY; i<=halfWindowSizeY; ++i) {
 			for (int j=-halfWindowSizeX; j<=halfWindowSizeX; ++j) {
 				const ImageRef x(u.x+j,u.y+i);
-				WeightedPatch::Pixel& pw = w.weights[n++];
 				w.normSq0 +=
-					(pw.tempWeight = leftImage.imageGray(x)) *
-					(pw.weight = EXP(Compute::WeightColor(leftImage.imageColor, colCenter, x)+Compute::WeightSpatial(j,i)));
-				w.sumWeights += pw.weight;
+					(w.pixelTempWeights[n] = leftImage.imageGray(x)) *
+					(w.pixelWeights[n] = EXP(Compute::WeightColor(leftImage.imageColor, colCenter, x)+Compute::WeightSpatial(j,i)));
+				w.sumWeights += w.pixelWeights[n];
+				++n;
 			}
 		}
 		ASSERT(n == numTexels);
@@ -940,9 +940,8 @@ void SemiGlobalMatcher::Match(const ViewData& leftImage, const ViewData& rightIm
 		w.normSq0 = 0;
 		n = 0;
 		do {
-			WeightedPatch::Pixel& pw = w.weights[n];
-			const float t(pw.tempWeight - tm);
-			w.normSq0 += (pw.tempWeight = pw.weight * t) * t;
+			const float t(w.pixelTempWeights[n] - tm);
+			w.normSq0 += (w.pixelTempWeights[n] = w.pixelWeights[n] * t) * t;
 		} while (++n < numTexels);
 		// compute pixel cost
 		Cost* costs = imageCosts.data()+pixel.idx;
@@ -956,11 +955,11 @@ void SemiGlobalMatcher::Match(const ViewData& leftImage, const ViewData& rightIm
 						goto NEXT_COST;
 					}
 					const float f(rightImage.imageGray(x));
-					const WeightedPatch::Pixel& pw = w.weights[n++];
-					const float fw(f*pw.weight);
+					const float fw(f*w.pixelWeights[n]);
 					sum += fw;
 					sumSq += f*fw;
-					nom += f*pw.tempWeight;
+					nom += f*w.pixelTempWeights[n];
+					++n;
 				}
 			}
 			{

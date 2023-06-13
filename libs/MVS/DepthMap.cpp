@@ -369,9 +369,6 @@ DepthEstimator::DepthEstimator(
 	#endif
 	idxPixel(_idx),
 	neighbors(0,2),
-	#if DENSE_SMOOTHNESS != DENSE_SMOOTHNESS_NA
-	neighborsClose(0,4),
-	#endif
 	scores(_depthData0.images.size()-1),
 	depthMap0(_depthData0.depthMap), normalMap0(_depthData0.normalMap), confMap0(_depthData0.confMap),
 	#if DENSE_NCC == DENSE_NCC_WEIGHTED
@@ -406,12 +403,19 @@ DepthEstimator::DepthEstimator(
 	#endif
 {
 	ASSERT(_depthData0.images.size() >= 1);
+	if (
+		(4 != GROUP_SIZE)
+		|| (DENSE_NCC != DENSE_NCC_WEIGHTED)) {
+		throw std::runtime_error( "Unsupported" );
+	}
 }
 
 // center a patch of given size on the segment
 bool DepthEstimator::PreparePixelPatch(const ImageRef& x)
 {
 	x0 = x;
+	pWeightMap = &weightMap0[x0.y*image0.image.width()+x0.x];
+	x0ULPatchCorner = Vec2_t((Calc_t)(x0.x-nSizeHalfWindow), (Calc_t) (x0.y-nSizeHalfWindow));
 	return image0.image.isInside(ImageRef(x.x-nSizeHalfWindow, x.y-nSizeHalfWindow)) &&
 	       image0.image.isInside(ImageRef(x.x+nSizeHalfWindow, x.y+nSizeHalfWindow));
 }
@@ -426,28 +430,28 @@ bool DepthEstimator::FillPixelPatch()
 		for (int j=-nSizeHalfWindow; j<=nSizeHalfWindow; j+=nSizeStep)
 			normSq0 += SQUARE(*pTexel0++ = image0.image(x0.y+i, x0.x+j)-mean);
 	#else
-	Weight& w = weightMap0[x0.y*image0.image.width()+x0.x];
+	Weight& w = *pWeightMap;
 	if (w.normSq0 == 0) {
 		w.sumWeights = 0;
 		int n = 0;
 		const float colCenter = image0.image(x0);
 		for (int i=-nSizeHalfWindow; i<=nSizeHalfWindow; i+=nSizeStep) {
 			for (int j=-nSizeHalfWindow; j<=nSizeHalfWindow; j+=nSizeStep) {
-				Weight::Pixel& pw = w.weights[n++];
 				w.normSq0 +=
-					(pw.tempWeight = image0.image(x0.y+i, x0.x+j)) *
-					(pw.weight = GetWeight(ImageRef(j,i), colCenter));
-				w.sumWeights += pw.weight;
+					(w.pixelTempWeights[n] = image0.image(x0.y + i, x0.x + j)) *
+					(w.pixelWeights[n] = GetWeight(ImageRef(j, i), colCenter));
+				w.sumWeights += w.pixelWeights[n];
+				++n;
 			}
 		}
+
 		ASSERT(n == nTexels);
 		const float tm(w.normSq0/w.sumWeights);
 		w.normSq0 = 0;
 		n = 0;
 		do {
-			Weight::Pixel& pw = w.weights[n];
-			const float t(pw.tempWeight - tm);
-			w.normSq0 += (pw.tempWeight = pw.weight * t) * t;
+			const float t(w.pixelTempWeights[n] - tm);
+			w.normSq0 += (w.pixelTempWeights[n] = w.pixelWeights[n] * t) * t;
 		} while (++n < nTexels);
 	}
 	normSq0 = w.normSq0;
@@ -458,48 +462,334 @@ bool DepthEstimator::FillPixelPatch()
 	return true;
 }
 
+bool DepthEstimator::IsScorable(
+	const DepthData::ViewData& image1,
+	ScoreHelper& sh
+)
+{
+	// Calculate H: ((image1.Hl + image1.Hm * mm) * image1.Hr)
+	// Points are culled frequently (>50% in limited testing).
+	// Attempt to identify them quickly.
+	// Calculate just the first two rows of H.
+	const Calc_t a = image1.Hl(0,0) + image1.Hm(0) * sh.mMat(0);
+	const Calc_t j = image1.Hr(0,0);
+	const Calc_t h00 = (Calc_t) (a * j);
+
+	const Calc_t b = image1.Hl(0,1) + image1.Hm(0) * sh.mMat(1);
+	const Calc_t l = image1.Hr(1,1);
+	const Calc_t h10 = (Calc_t) (b * l);
+
+	const Calc_t k = image1.Hr(0,2);
+	const Calc_t m = image1.Hr(1,2);
+	const Calc_t c = image1.Hl(0,2) + image1.Hm(0) * sh.mMat(2);
+	const Calc_t h20 = (Calc_t) (a * k + b * m + c);
+
+	const Calc_t g = image1.Hl(2,0) + image1.Hm(2) * sh.mMat(0);
+	const Calc_t h = image1.Hl(2,1) + image1.Hm(2) * sh.mMat(1);
+	const Calc_t i = image1.Hl(2,2) + image1.Hm(2) * sh.mMat(2);
+	const Calc_t h02 = (Calc_t) (g * j);
+	const Calc_t h12 = (Calc_t) (h * l);
+	const Calc_t h22 = (Calc_t) (g * k + h * m + i);
+
+	const Calc_t x = h00 * x0ULPatchCorner[0] + h10 * x0ULPatchCorner[1] + h20;
+	const Calc_t z = h02 * x0ULPatchCorner[0] + h12 * x0ULPatchCorner[1] + h22;
+
+	const Calc_t imageWidthWithBorder = (Calc_t) (image1.image.width() - 2);
+
+	// Is the point culled horizontally?
+	if ((x < 1. * z) | ((x > imageWidthWithBorder*z))) { // Binary | intentional
+		return false;
+	}
+
+	// Compute the remaining row of H.
+	const Calc_t d = image1.Hl(1,0) + image1.Hm(1) * sh.mMat(0);
+	const Calc_t e = image1.Hl(1,1) + image1.Hm(1) * sh.mMat(1);
+	const Calc_t f = image1.Hl(1,2) + image1.Hm(1) * sh.mMat(2);
+	const Calc_t h01 = (Calc_t) (d * j);
+	const Calc_t h11 = (Calc_t) (e * l);
+	const Calc_t h21 = (Calc_t) (d * k + e * m + f);
+
+	const Calc_t y = h01 * x0ULPatchCorner[0] + h11 * x0ULPatchCorner[1] + h21;
+
+	const Calc_t imageHeightWithBorder = (Calc_t) (image1.image.height() - 2);
+
+	// Is the point culled vertically?
+	if ((y < 1. * z) | (y > imageHeightWithBorder*z)) { // Binary | intentional
+		return false;
+	}
+
+	sh.mVX = _SetN((float) x, (float) y, (float) z, 0.f);
+
+	// Prepare H for rasterizing.
+	// Determine H's horizontal and vertical basis vectors.
+	const _Data vHTRow0 = _SetN(h00, h01, h02, 0.f);
+	const _Data vHTRow1 = _SetN(h10, h11, h12, 0.f);
+	constexpr _Data vSizeStep = {(float) nSizeStep, (float) nSizeStep, (float) nSizeStep, (float) nSizeStep};
+	sh.mVBasisH = _Mul(vHTRow0, vSizeStep);
+	sh.mVBasisV = _Mul(vHTRow1, vSizeStep);
+	// Epsilon is needed as a+a+a+a isn't necessarily equal to 4*a
+	constexpr _Data vFourEpsilon = {4.f + FLT_EPSILON, 4.f + FLT_EPSILON, 4.f + FLT_EPSILON, 0.f};
+	const _Data vBasisH4 = _Mul(sh.mVBasisH, vFourEpsilon);
+	const _Data vBasisV4 = _Mul(sh.mVBasisV, vFourEpsilon);
+
+	sh.mVImageWidthWithBorder = _Set((float) imageWidthWithBorder);
+	sh.mVImageHeightWithBorder = _Set((float) imageHeightWithBorder);
+
+	// vX is the projected coordinate of the upper-left portion of the patch;
+	// it is guaranteed within the view boundary.
+	// Determine the other three corners (vUR, vLL, vLR)
+	_Data vUR = _Add(sh.mVX, vBasisH4);
+	_Data vLL = _Add(sh.mVX, vBasisV4);
+	_Data vLR = _Add(vUR, vBasisV4);
+	_Data vDontCare = _SetZero();
+
+	// Use transpose to separate the x, y, and z components.
+	// JPB WIP OPT Revisit for transpose3
+	_MM_TRANSPOSE4_PS(vUR, vLL, vLR, vDontCare);
+
+	_Data vCornersX = vUR;
+	_Data vCornersY = vLL;
+	_Data vCornersZ = vLR;
+	_Data vCornersWidthZ = _Mul(vCornersZ, sh.mVImageWidthWithBorder);
+	_Data vCornersHeightZ = _Mul(vCornersZ, sh.mVImageHeightWithBorder);
+
+	// Cmp leaves 1's if true, 0 otherwise.
+	const _Data vLtX = _CmpLT(vCornersX, vCornersZ);
+	const _Data vLtY = _CmpLT(vCornersY, vCornersZ);
+	const _Data vGtX = _CmpGT(vCornersX, vCornersWidthZ);
+	const _Data vGtY = _CmpGT(vCornersY, vCornersHeightZ);
+
+	// Reject the patch if any of these corners are outside the view boundary.
+	// JPB WIP BUG This does not identify patches which completely cover the view boundary.
+	const _Data vCmpResult = _Or(_Or(vLtX, vLtY), _Or(vGtX, vGtY));
+
+	return AllZerosI(_CastIF(vCmpResult));
+}
+
 // compute pixel's NCC score in the given target image
-float DepthEstimator::ScorePixelImage(const DepthData::ViewData& image1, Depth depth, const Normal& normal)
+float DepthEstimator::ScorePixelImage(
+	bool& deferred,
+	_Data& deferredResult,
+	const DepthData::ViewData& image1,
+	const ScoreHelper& sh
+)
 {
 	// center a patch of given size on the segment and fetch the pixel values in the target image
-	Matrix3x3f H(ComputeHomographyMatrix(image1, depth, normal));
-	Point3f X;
-	ProjectVertex_3x3_2_3(H.val, Point2f(float(x0.x-nSizeHalfWindow),float(x0.y-nSizeHalfWindow)).ptr(), X.ptr());
-	Point3f baseX(X);
-	H *= float(nSizeStep);
-	int n(0);
 	float sum(0);
 	#if DENSE_NCC != DENSE_NCC_DEFAULT
 	float sumSq(0), num(0);
 	#endif
-	#if DENSE_NCC == DENSE_NCC_WEIGHTED
-	const Weight& w = weightMap0[x0.y*image0.image.width()+x0.x];
-	#endif
-	for (int i=-nSizeHalfWindow; i<=nSizeHalfWindow; i+=nSizeStep) {
-		for (int j=-nSizeHalfWindow; j<=nSizeHalfWindow; j+=nSizeStep) {
-			const Point2f pt(X);
-			if (!image1.image.isInsideWithBorder<float,1>(pt))
-				return thRobust;
-			const float v(image1.image.sample(pt));
-			#if DENSE_NCC == DENSE_NCC_FAST
-			sum += v;
-			sumSq += SQUARE(v);
-			num += texels0(n++)*v;
-			#elif DENSE_NCC == DENSE_NCC_WEIGHTED
-			const Weight::Pixel& pw = w.weights[n++];
-			const float vw(v*pw.weight);
-			sum += vw;
-			sumSq += v*vw;
-			num += v*pw.tempWeight;
-			#else
-			sum += texels1(n++)=v;
-			#endif
-			X.x += H[0]; X.y += H[3]; X.z += H[6];
-		}
-		baseX.x += H[1]; baseX.y += H[4]; baseX.z += H[7];
-		X = baseX;
+
+	const Weight& w = *pWeightMap;
+
+	const int elemByteStride = (int) image1.image.elem_stride();
+	const int rowByteStride = (int) image1.image.row_stride();
+	const int rowFloatStride = rowByteStride/sizeof(float);
+	const _DataI vRowByteStride = _SetI(rowByteStride);
+	const _DataI vRowElemStride = _SetI(elemByteStride);
+
+	// JPB WIP BUG Hardcoded for nTexels == 25
+	ASSERT(25 == nTexels);
+
+	// JPB WIP TODO: Change scan to work by group.
+
+	// Handle pixel "0", the ul corner, first:
+	{
+		// Requires accuracy.
+		const _Data vPt = _Div(sh.mVX, _Splat(sh.mVX, 2));
+
+		const _DataI vPtAsInt = _TruncateIF(vPt);
+		const _Data vFracXY = _Sub(vPt, _ConvertFI(vPtAsInt));
+
+		// Faster to calculate addresses using scalar arithmetic.
+		const uchar* __restrict pSamples = image1.image.data + _AsArrayI(vPtAsInt, 1) * rowByteStride + _AsArrayI(vPtAsInt, 0) * elemByteStride;
+
+		const float ul = *(float*) pSamples;
+		const float ur = *(float*) (pSamples + elemByteStride);
+		const float ll = *(float*) (pSamples + rowByteStride);
+		const float lr = *(float*) (pSamples + rowByteStride + elemByteStride);
+
+		// Lerp of lerp verified accurate with Wolfram.
+		const float top = (ur - ul) * _AsArray(vFracXY, 0) + ul;
+		const float bot = (lr - ll) * _AsArray(vFracXY, 0) + ll;
+		const float v = (bot - top) * _AsArray(vFracXY, 1) + top;
+
+		const float vw(v*w.pixelWeights[0]);
+		sum += vw;
+		sumSq += v*vw;
+		num += v*w.pixelTempWeights[0];
 	}
-	ASSERT(n == nTexels);
+
+	// JPB WIP OPT Not fully AVX compatible (GROUP_SIZE must be 4).
+	// DENSE_NCC == DENSE_NCC_WEIGHTED
+	_Data vSampleSets[6];
+
+	constexpr _Data vOne = {1.f, 1.f, 1.f, 1.f};
+
+	// Do remainder of leftmost column, pixels "5", "10, "15" and "20".
+	// Vectorized to process the four pixels.
+	{
+		const _Data xTmp = _Splat(sh.mVX, 0);
+		const _Data dxTmp = _Splat(sh.mVBasisV, 0);
+		constexpr _Data deltaFactor = {1.f, 2.f, 3.f, 4.f};
+		_Data vX1X2X3X4 = _Add(xTmp, _Mul(dxTmp, deltaFactor));
+
+		const _Data yTmp = _Splat(sh.mVX, 1);
+		const _Data dyTmp = _Splat(sh.mVBasisV, 1);
+		_Data vY1Y2Y3Y4 = _Add(yTmp, _Mul(dyTmp, deltaFactor));
+
+		const _Data zTmp = _Splat(sh.mVX, 2);
+		const _Data dzTmp = _Splat(sh.mVBasisV, 2);
+		_Data vZ1Z2Z3Z4 = _Add(zTmp, _Mul(dzTmp, deltaFactor));
+
+		// Requires accuracy.
+		const _Data vPtx = _Div(vX1X2X3X4, vZ1Z2Z3Z4);
+		const _Data vPty = _Div(vY1Y2Y3Y4, vZ1Z2Z3Z4);
+
+		const _DataI vPtxAsInt = _TruncateIF(vPtx);
+		const _DataI vPtyAsInt = _TruncateIF(vPty);
+
+		// Faster to calculate addresses using scalar arithmetic.
+		const uchar* __restrict pUL = image1.image.data + _AsArrayI(vPtyAsInt, 0) * rowByteStride + _AsArrayI(vPtxAsInt, 0) * elemByteStride;
+		const uchar* __restrict pUR = image1.image.data + _AsArrayI(vPtyAsInt, 1) * rowByteStride + _AsArrayI(vPtxAsInt, 1) * elemByteStride;
+		const uchar* __restrict pLL = image1.image.data + _AsArrayI(vPtyAsInt, 2) * rowByteStride + _AsArrayI(vPtxAsInt, 2) * elemByteStride;
+		const uchar* __restrict pLR = image1.image.data + _AsArrayI(vPtyAsInt, 3) * rowByteStride + _AsArrayI(vPtxAsInt, 3) * elemByteStride;
+
+		// Okay on rounding as all values are guaranteed positive.
+		const _Data vFracX1X2X3X4 = _Sub(vPtx, _ConvertFI(vPtxAsInt)); // pt(i).x - (int) pt(i).x
+		const _Data vFracY1Y2Y3Y4 = _Sub(vPty, _ConvertFI(vPtyAsInt)); // pt(i).y - (int) pt(i).y
+
+		_Data vULSamples = _mm_loadl_pi(vY1Y2Y3Y4 /* don't care */, (__m64*) pUL);
+		_Data vURSamples = _mm_loadl_pi(vY1Y2Y3Y4 /* don't care */,  (__m64*) pUR);
+		_Data vLLSamples = _mm_loadl_pi(vY1Y2Y3Y4 /* don't care */, (__m64*) pLL);
+		_Data vLRSamples = _mm_loadl_pi(vY1Y2Y3Y4 /* don't care */, (__m64*) pLR);
+
+		vULSamples = _mm_loadh_pi(vULSamples, (__m64*) (pUL + rowByteStride));
+		vURSamples = _mm_loadh_pi(vURSamples, (__m64*) (pUR + rowByteStride));
+		vLLSamples = _mm_loadh_pi(vLLSamples, (__m64*) (pLL + rowByteStride));
+		vLRSamples = _mm_loadh_pi(vLRSamples, (__m64*) (pLR + rowByteStride));
+
+		_MM_TRANSPOSE4_PS(vULSamples, vURSamples, vLLSamples, vLRSamples);
+
+		// Lerp of lerp verified accurate with Wolfram.
+		const _Data vTop = _Add(_Mul(_Sub(vURSamples, vULSamples), vFracX1X2X3X4), vULSamples);
+		const _Data vBot = _Add(_Mul(_Sub(vLRSamples, vLLSamples), vFracX1X2X3X4), vLLSamples);
+		vSampleSets[0] = _Add(_Mul(_Sub(vBot, vTop), vFracY1Y2Y3Y4), vTop);
+	}
+
+	// Do the remaining 4x5 block one row at a time:
+	//  1  2  3  4
+	//  6  7  8  9
+	// 11 12 13 14
+	// 16 17 18 19
+	// 21 22 23 24
+	const _Data vX = _Splat(sh.mVX, 0);
+	const _Data vY = _Splat(sh.mVX, 1);
+	const _Data vZ = _Splat(sh.mVX, 2);
+
+	const _Data vDx = _Splat(sh.mVBasisH, 0);
+	const _Data vDy = _Splat(sh.mVBasisH, 1);
+	const _Data vDz = _Splat(sh.mVBasisH, 2);
+
+	constexpr _Data vDFactor = {1.f, 2.f, 3.f, 4.f};
+	const _Data vDxDFactor = _Mul(vDx, vDFactor);
+	const _Data vDyDFactor = _Mul(vDy, vDFactor);
+	const _Data vDzDFactor = _Mul(vDz, vDFactor);
+
+	_Data vX1X2X3X4 = _Add(vX, vDxDFactor);
+	_Data vY1Y2Y3Y4 = _Add(vY, vDyDFactor);
+	_Data vZ1Z2Z3Z4 = _Add(vZ, vDzDFactor);
+
+	const _Data vBasisX = _Splat(sh.mVBasisV, 0);
+	const _Data vBasisY = _Splat(sh.mVBasisV, 1);
+	const _Data vBasisZ = _Splat(sh.mVBasisV, 2);
+
+	for (auto i = 0; i < 5; ++i) {
+		// Requires accuracy.
+		// Update all coordinates for the next row.
+		const _Data vPtx = _Div(vX1X2X3X4, vZ1Z2Z3Z4);
+		const _Data vPty = _Div(vY1Y2Y3Y4, vZ1Z2Z3Z4);
+
+		vX1X2X3X4 = _Add(vX1X2X3X4, vBasisX);
+		vY1Y2Y3Y4 = _Add(vY1Y2Y3Y4, vBasisY);
+		vZ1Z2Z3Z4 = _Add(vZ1Z2Z3Z4, vBasisZ);
+
+		const _DataI vPtxAsInt = _TruncateIF(vPtx);
+		const _DataI vPtyAsInt = _TruncateIF(vPty);
+
+		// Faster to calculate addresses using scalar arithmetic.
+		const uchar* __restrict pUL = image1.image.data + _AsArrayI(vPtyAsInt, 0) * rowByteStride + _AsArrayI(vPtxAsInt, 0) * elemByteStride;
+		const uchar* __restrict pUR = image1.image.data + _AsArrayI(vPtyAsInt, 1) * rowByteStride + _AsArrayI(vPtxAsInt, 1) * elemByteStride;
+		const uchar* __restrict pLL = image1.image.data + _AsArrayI(vPtyAsInt, 2) * rowByteStride + _AsArrayI(vPtxAsInt, 2) * elemByteStride;
+		const uchar* __restrict pLR = image1.image.data + _AsArrayI(vPtyAsInt, 3) * rowByteStride + _AsArrayI(vPtxAsInt, 3) * elemByteStride;
+
+		// Okay on rounding as all values are guaranteed positive.
+		const _Data vFracX1X2X3X4 = _Sub(vPtx, _ConvertFI(vPtxAsInt)); // pt(i).x - (int) pt(i).x
+		const _Data vFracY1Y2Y3Y4 = _Sub(vPty, _ConvertFI(vPtyAsInt)); // pt(i).y - (int) pt(i).y
+
+		_Data vULSamples = _mm_loadl_pi(vY1Y2Y3Y4 /* don't care */, (__m64*) pUL);
+		_Data vURSamples = _mm_loadl_pi(vY1Y2Y3Y4 /* don't care */,  (__m64*) pUR);
+		_Data vLLSamples = _mm_loadl_pi(vY1Y2Y3Y4 /* don't care */, (__m64*) pLL);
+		_Data vLRSamples = _mm_loadl_pi(vY1Y2Y3Y4 /* don't care */, (__m64*) pLR);
+
+		vULSamples = _mm_loadh_pi(vULSamples, (__m64*) (pUL + rowByteStride));
+		vURSamples = _mm_loadh_pi(vURSamples, (__m64*) (pUR + rowByteStride));
+		vLLSamples = _mm_loadh_pi(vLLSamples, (__m64*) (pLL + rowByteStride));
+		vLRSamples = _mm_loadh_pi(vLRSamples, (__m64*) (pLR + rowByteStride));
+
+		_MM_TRANSPOSE4_PS(vULSamples, vURSamples, vLLSamples, vLRSamples);
+
+		// Lerp of lerp verified accurate with Wolfram.
+		const _Data vTop = _Add(_Mul(_Sub(vURSamples, vULSamples), vFracX1X2X3X4), vULSamples);
+		const _Data vBot = _Add(_Mul(_Sub(vLRSamples, vLLSamples), vFracX1X2X3X4), vLLSamples);
+		vSampleSets[i+1] = _Add(_Mul(_Sub(vBot, vTop), vFracY1Y2Y3Y4), vTop);
+	}
+
+	// The "4" variants will be used to maintain sums/nums for
+	// four samples at a time.
+	_Data vSum4 = _SetZero();
+	_Data vSum4Next = _SetZero();
+	_Data vSumSq4 = _SetZero();
+	_Data vSumSq4Next = _SetZero();
+	_Data vNum4 = _SetZero();
+	_Data vNum4Next = _SetZero();
+
+	_Data weights  = _SetN(w.pixelWeights[5], w.pixelWeights[10], w.pixelWeights[15], w.pixelWeights[20]);//_Load(&w.pixelWeights[0]); // Would have to be transposed JPB WIP BUG
+	_Data tempWeights = _SetN(w.pixelTempWeights[5], w.pixelTempWeights[10], w.pixelTempWeights[15], w.pixelTempWeights[20] ); //_Load(&w.pixelTempWeights[0]);
+
+	// Staggered on twos for better pipelining.
+	for (auto i = 0; i < 6; i += 2 ) {
+		if (i != 0) {
+			weights = _Load(&w.pixelWeights[(i-1)*5+1]);
+			tempWeights = _Load(&w.pixelTempWeights[(i-1)*5+1]);
+		}
+
+		_Data weightsNext = _Load(&w.pixelWeights[i*5+1]);
+		_Data tempWeightsNext = _Load(&w.pixelTempWeights[i*5+1]);
+
+		_Data vw = _Mul(vSampleSets[i], weights);
+		_Data vwNext = _Mul(vSampleSets[i+1], weightsNext);
+
+		vSum4 = _Add(vSum4, vw);
+		vSum4Next = _Add(vSum4Next, vwNext);
+
+		vSumSq4 = _Add(vSumSq4, _Mul(vSampleSets[i],vw));
+		vSumSq4Next = _Add(vSumSq4Next, _Mul(vSampleSets[i+1],vwNext));
+
+		vNum4 = _Add(vNum4, _Mul(vSampleSets[i], tempWeights));
+		vNum4Next = _Add(vNum4Next, _Mul(vSampleSets[i+1], tempWeightsNext));
+	}
+
+	vSum4 = _Add(vSum4, vSum4Next);
+	vSumSq4 = _Add(vSumSq4, vSumSq4Next);
+	vNum4 = _Add(vNum4, vNum4Next);
+
+	// Gather the single scalar sum/sumSq/num and add the 24 vectorized sum/sumSq/num
+	// values together.
+	sum += FastHsum(vSum4);
+	sumSq += FastHsum(vSumSq4);
+	num += FastHsum(vNum4);
+
 	// score similarity of the reference and target texture patches
 	#if DENSE_NCC == DENSE_NCC_FAST
 	const float normSq1(sumSq-SQUARE(sum/nSizeWindow));
@@ -514,43 +804,122 @@ float DepthEstimator::ScorePixelImage(const DepthData::ViewData& image1, Depth d
 	#if DENSE_NCC == DENSE_NCC_DEFAULT
 	const float num(texels0.dot(texels1));
 	#endif
-	const float ncc(CLAMP(num/SQRT(nrmSq), -1.f, 1.f));
+	const float ncc(FastClampS(num/FastSqrtS(nrmSq), -1.f, 1.f));
 	float score(1.f-ncc);
 	#if DENSE_SMOOTHNESS != DENSE_SMOOTHNESS_NA
-	// encourage smoothness
-	for (const NeighborEstimate& neighbor: neighborsClose) {
-		ASSERT(neighbor.depth > 0);
-		#if DENSE_SMOOTHNESS == DENSE_SMOOTHNESS_PLANE
-		const float factorDepth(DENSE_EXP(SQUARE(plane.Distance(neighbor.X)/depth) * smoothSigmaDepth));
-		#else
-		const float factorDepth(DENSE_EXP(SQUARE((depth-neighbor.depth)/depth) * smoothSigmaDepth));
-		#endif
-		const float factorNormal(DENSE_EXP(SQUARE(ACOS(ComputeAngle(normal.ptr(), neighbor.normal.ptr()))) * smoothSigmaNormal));
-		score *= (1.f - smoothBonusDepth * factorDepth) * (1.f - smoothBonusNormal * factorNormal);
-	}
+	score *= sh.mScoreFactor;
 	#endif
+
 	if (!image1.depthMap.empty()) {
 		ASSERT(OPTDENSE::fEstimationGeometricWeight > 0);
 		float consistency(4.f);
-		const Point3f X1(image1.Tl*Point3f(float(X0.x)*depth,float(X0.y)*depth,depth)+image1.Tm); // Kj * Rj * (Ri.t() * X + Ci - Cj)
-		if (X1.z > 0) {
-			const Point2f x1(X1);
-			if (image1.depthMap.isInsideWithBorder<float,1>(x1)) {
-				Depth depth1;
-				if (image1.depthMap.sample(depth1, x1, [&X1](Depth d) { return IsDepthSimilar(X1.z, d, 0.03f); })) {
-					const Point2f xb(image1.Tr*Point3f(x1.x*depth1,x1.y*depth1,depth1)+image1.Tn); // Ki * Ri * (Rj.t() * Kj-1 * X + Cj - Ci)
-					const float dist(norm(Point2f(float(x0.x)-xb.x, float(x0.y)-xb.y)));
-					consistency = MINF(SQRT(dist*(dist+2.f)), consistency);
+
+		// JPB WIP BUG This should be doable with a matrix multiply with SIMD.. maybe we can keep mDepthMapPt splatted?
+		// _Data tmp = _Add(_Mul(row2, depthmap2), _Add(_Mul(row0, depthmap0), _Mul(row1, depthmap1)));
+		// Brings this to 
+
+		const Point3f X1(image1.Tl*Point3f(float(X0.x)*sh.mDepth,float(X0.y)*sh.mDepth,sh.mDepth)+image1.Tm); // Kj * Rj * (Ri.t() * X + Ci - Cj)
+
+		const float X1z = X1[2]; //image1.Tl(2,0) * sh.mDepthMapPt[0] + image1.Tl(2,1) * sh.mDepthMapPt[1] + image1.Tl(2,2) * sh.mDepthMapPt[2] + image1.Tm[2];
+		if (X1z > 0.f) { // Roughly 5% rejection.
+			const float X1x = X1[0]; //image1.Tl(0,0) * sh.mDepthMapPt[0] + image1.Tl(0,1) * sh.mDepthMapPt[1] + image1.Tl(0,2) * sh.mDepthMapPt[2] + image1.Tm[0];
+			if (
+				(X1x >= 1.f * X1z)
+				& (X1x <= ((float)image1.depthMap.width() - 2)*X1z)
+				) { // Roughly 1/3 are rejected,
+				const float X1y = X1[1]; //image1.Tl(1,0) * sh.mDepthMapPt[0] + image1.Tl(1,1) * sh.mDepthMapPt[1] + image1.Tl(1,2) * sh.mDepthMapPt[2] + image1.Tm[1];
+				if (
+					(X1y >= 1.f * X1z)
+					& (X1y <= ((float)image1.depthMap.height() - 2)*X1z)
+					) { // 1/2 are rejected.
+					const float X1PxAsFloat = X1x/X1z;
+					const float X1PyAsFloat = X1y/X1z;
+
+					const int X1PAsInt = _cvt_ftoi_fast(X1PxAsFloat);
+					const int XYPAsInt = _cvt_ftoi_fast(X1PyAsFloat);
+
+					// Depth image may differ in size.
+					const int byteStride = (int) image1.depthMap.row_stride();
+					const int stride = byteStride/sizeof(float);
+
+					const size_t idx = XYPAsInt * stride + X1PAsInt;
+					const float* __restrict p1 = ((float*) (image1.depthMap.data)) + idx;
+
+					_Data vSamples = _mm_loadl_pi(vOne /* Don't care */, (__m64*) p1);
+					vSamples = _mm_loadh_pi(vSamples, (__m64*) (p1+stride));
+
+					_Data vX1Z = _Set(X1z);
+					//x0y0, x1y0, x0y1, x1y1);
+					constexpr _Data vSmall = {0.03f, 0.03f, 0.03f, 0.03f};
+					const auto vCmp = _CmpLT(_Sub(vX1Z, vSamples), _Mul(vX1Z, vSmall));
+
+					if (!AllZerosI(_CastIF(vCmp))) { // b00 | b10 | b01 | b11) {
+						const float sx = X1PxAsFloat - ((float) X1PAsInt);
+						const float sy = X1PyAsFloat - ((float) XYPAsInt);
+						const float sx1 = 1.f - sx;
+						const float sy1 = 1.f - sy;
+
+						//const float top = (uRSample - uLSample) * _AsArray(fracXYZ, 0) + uLSample;
+						//const float bot = (lRSample - lLSample) * _AsArray(fracXYZ, 0) + uLSample;
+						//const float sample = (bot - top) * _AsArray(fracXYZ, 1) + top;
+
+						const bool b00 = _AsArrayI(_CastIF(vCmp), 0) == 0xFFFFFFFF;
+						const bool b10 = _AsArrayI(_CastIF(vCmp), 1) == 0xFFFFFFFF;
+						const bool b01 = _AsArrayI(_CastIF(vCmp), 2) == 0xFFFFFFFF;
+						const bool b11 = _AsArrayI(_CastIF(vCmp), 3) == 0xFFFFFFFF;
+
+						const float x0y0 = _AsArray(vSamples, 0);
+						const float x1y0 = _AsArray(vSamples, 1);
+						const float x0y1 = _AsArray(vSamples, 2);
+						const float x1y1 = _AsArray(vSamples, 3);
+
+						const float depth1 = 
+							sy1*(sx1*Cast<float>(b00 ? x0y0 : (b10 ? x1y0 : (b01 ? x0y1 : x1y1))) + sx*Cast<float>(b10 ? x1y0 : (b00 ? x0y0 : (b11 ? x1y1 : x0y1)))) +
+							sy *(sx1*Cast<float>(b01 ? x0y1 : (b11 ? x1y1 : (b00 ? x0y0 : x1y0))) + sx*Cast<float>(b11 ? x1y1 : (b01 ? x0y1 : (b10 ? x1y0 : x0y0))));
+
+						//const Point2f xb(image1.Tr*Point3f(x1.x*depth1,x1.y*depth1,depth1)+image1.Tn); // Ki * Ri * (Rj.t() * Kj-1 * X + Cj - Ci)
+
+						if (!sh.mLowResDepthMapEmpty) {
+							const float src[] = {X1PxAsFloat * depth1, X1PyAsFloat * depth1, depth1};
+							float xbx = image1.Tr(0,0) * src[0] + image1.Tr(0,1) * src[1] + image1.Tr(0,2) * src[2] + image1.Tn[0];
+							float xby = image1.Tr(1,0) * src[0] + image1.Tr(1,1) * src[1] + image1.Tr(1,2) * src[2] + image1.Tn[1];
+							const float xbz = image1.Tr(2,0) * src[0] + image1.Tr(2,1) * src[1] + image1.Tr(2,2) * src[2] + image1.Tn[2];
+
+							xbx /= xbz;
+							xby /= xbz;
+
+							const float x = ((float) x0.x)-xbx;
+							const float y = ((float) x0.y)-xby;
+							const float dist = FastSqrtS(x*x + y*y);
+							consistency = FastMinF(FastSqrtS(dist*(dist+2.f)), consistency);
+						} else {
+							// Defer the calculation so consistency can be calculated vectorized.
+							deferredResult = image1.Tr4.Mul44Vec3(_SetN(X1PxAsFloat * depth1, X1PyAsFloat * depth1, depth1, 1.f));
+
+							const float src[] = {X1PxAsFloat * depth1, X1PyAsFloat * depth1, depth1};
+							float xbx = image1.Tr(0,0) * src[0] + image1.Tr(0,1) * src[1] + image1.Tr(0,2) * src[2] + image1.Tn[0];
+							float xby = image1.Tr(1,0) * src[0] + image1.Tr(1,1) * src[1] + image1.Tr(1,2) * src[2] + image1.Tn[1];
+							const float xbz = image1.Tr(2,0) * src[0] + image1.Tr(2,1) * src[1] + image1.Tr(2,2) * src[2] + image1.Tn[2];
+							_AsArray(deferredResult,0) = xbx;
+							_AsArray(deferredResult,1) = xby;
+							_AsArray(deferredResult,2) = xbz;
+
+							deferred = true;
+							return score;
+						}
+					}
 				}
 			}
 		}
+
 		score += OPTDENSE::fEstimationGeometricWeight * consistency;
 	}
+
 	// apply depth prior weight based on patch textureless
-	if (!lowResDepthMap.empty()) {
+	if (!sh.mLowResDepthMapEmpty) {
 		const Depth d0 = lowResDepthMap(x0);
 		if (d0 > 0) {
-			const float deltaDepth(MINF(DepthSimilarity(d0, depth), 0.5f));
+			const float deltaDepth(FastMinF(DepthSimilarity(d0, sh.mDepth), 0.5f));
 			const float smoothSigmaDepth(-1.f / (1.f * 0.02f)); // 0.12: patch texture variance below 0.02 (0.12^2) is considered texture-less
 			const float factorDeltaDepth(DENSE_EXP(normSq0 * smoothSigmaDepth));
 			score = (1.f-factorDeltaDepth)*score + factorDeltaDepth*deltaDepth;
@@ -561,13 +930,85 @@ float DepthEstimator::ScorePixelImage(const DepthData::ViewData& image1, Depth d
 }
 
 // compute pixel's NCC score
-float DepthEstimator::ScorePixel(Depth depth, const Normal& normal)
+float DepthEstimator::ScorePixel(Depth depth, const Normal& normal, float scoreFactor)
 {
 	ASSERT(depth > 0 && normal.dot(Cast<float>(X0)) <= 0);
 	// compute score for this pixel as seen in each view
 	ASSERT(scores.size() == images.size());
-	FOREACH(idxView, images)
-		scores[idxView] = ScorePixelImage(images[idxView], depth, normal);
+
+	ScoreHelper sh(
+		depth,
+		Matx13_t(Vec3(normal).t()*INVERT(Vec3(normal).dot(X0) * depth)), // Always double.
+		scoreFactor,
+		Eigen::Vector4f(float(X0.x)*depth,float(X0.y)*depth,depth,1.f),
+		lowResDepthMap.empty()
+	);
+
+	boost::container::small_vector<std::pair<IDX, _Data>, 1000> deferredResults;
+	deferredResults.reserve(images.size());
+
+	FOREACH(idxView, images) {
+		if (IsScorable(images[idxView], sh)) {
+			bool deferred = false;
+			_Data deferredResult;
+			scores[idxView] = ScorePixelImage(deferred, deferredResult, images[idxView], sh);
+			if (deferred) { // Only sets deferred if deferred.
+				deferredResults.emplace_back(idxView, deferredResult);
+			}
+		} else {
+			scores[idxView] = thRobust;
+		}
+	}
+
+	// Process the deferred elements (now more efficiently):
+	if (!deferredResults.empty()) {
+		const _Data vPatchX = _Set((float) x0.x);
+		const _Data vPatchY = _Set((float) x0.y);
+
+		size_t startIndex = 0;
+		for (size_t remaining = deferredResults.size(); remaining > 0; startIndex += GROUP_SIZE) {
+			const size_t cnt = std::min((size_t) GROUP_SIZE, remaining);
+			// Beware: We may process partial groups where ultimately portions
+			// of the registers may be undefined.
+
+			_Data vConsistencies = _Set(4.f); // Default
+			_Data vSrcs[4];
+
+			for (size_t i = 0; i < cnt; ++i) {
+				vSrcs[i] = deferredResults[startIndex+i].second;
+			}
+
+			_MM_TRANSPOSE4_PS(vSrcs[0], vSrcs[1], vSrcs[2], vSrcs[3]);
+
+			// vSrcs[0] now has x0, x1, x2, x3
+			auto& vx0x1x2x3 = vSrcs[0];
+			auto& vy0y1y2y3 = vSrcs[1];
+			auto& vz0z1z2z3 = vSrcs[2];
+
+			_Data vProjX = _Div(vx0x1x2x3, vz0z1z2z3);
+			_Data vProjY = _Div(vy0y1y2y3, vz0z1z2z3);
+
+			_Data vDeltaX = _Sub(vPatchX, vProjX);
+			_Data vDeltaY = _Sub(vPatchY, vProjY);
+
+			_Data vDist = _Sqrt(_Add(_Mul(vDeltaX, vDeltaX), _Mul(vDeltaY, vDeltaY)));
+			constexpr _Data vTwo = {2.f, 2.f, 2.f, 2.f};
+			_Data vConsistenciesLhs = _Mul(vDist, _Add(vDist, vTwo));
+			vConsistencies = _Min(_Sqrt(vConsistenciesLhs), vConsistencies);
+
+			// JPB WIP OPT Revisit...
+			for (size_t i = 0; i < cnt; ++i) {
+				const IDX scoreIdx = deferredResults[i+startIndex].first;
+				scores[scoreIdx] += OPTDENSE::fEstimationGeometricWeight * _AsArray(vConsistencies, i);
+
+				ASSERT(ISFINITE(scores[scoreIdx]));
+				scores[scoreIdx] = MIN(2.f, scores[scoreIdx]);
+			}
+
+			remaining -= cnt;
+		}
+	}
+
 	#if DENSE_AGGNCC == DENSE_AGGNCC_NTH
 	// set score as the nth element
 	return scores.GetNth(idxScore);
@@ -594,7 +1035,34 @@ float DepthEstimator::ScorePixel(Depth depth, const Normal& normal)
 	#if 0
 	return std::accumulate(scores.cbegin(), &scores.GetNth(idxScore), 0.f) / idxScore;
 	#elif 1
-	const float* pescore(&scores.GetNth(idxScore));
+	float* pescore;
+
+	// As MSVC always uses an insertion sort for GetNth when the number of items
+	// is 32 or less, here we craft a much faster custom GetNth for N == 2.
+	// May not work well when scores.size() is large.
+	// JPB WIP Add warning.
+	if (idxScore == 1 && scores.size() >= 2) {
+		auto first = std::begin(scores);
+		auto second = first+1;
+
+		if (*second < *first) {
+			std::iter_swap(first, second);
+		}
+
+		for (auto it = std::begin(scores)+2; it != std::end(scores); ++it) {
+			if (*it < scores[0]) {
+				auto tmp = scores[1];
+				scores[1] = scores[0];
+				scores[0] = *it;
+				*it = tmp;
+			} else if (*it < scores[1]) {
+				std::swap(*it, scores[1]);
+			}
+		}
+		pescore = &scores[1];
+	} else {
+		pescore = &scores.GetNth(idxScore);
+	}
 	const float* pscore(scores.cbegin());
 	int n(1); float score(*pscore);
 	do {
@@ -604,6 +1072,7 @@ float DepthEstimator::ScorePixel(Depth depth, const Normal& normal)
 		score += s;
 		++n;
 	} while (pscore < pescore);
+
 	return score/n;
 	#else
 	const float thScore(MAXF(*std::min_element(scores.cbegin(), scores.cend()), 0.05f)*2);
@@ -622,6 +1091,52 @@ float DepthEstimator::ScorePixel(Depth depth, const Normal& normal)
 	#endif
 }
 
+
+float DepthEstimator::CalculateScoreFactor(_Data normal, float depth, _Data* neighborsCloseX)
+{
+	const _Data vSmoothBonusDepth = _Set(smoothBonusDepth);
+	const _Data vSmoothSigmaNormal = _Set(smoothSigmaNormal);
+	const _Data vSmoothBonusNormal = _Set(smoothBonusNormal);
+	const _Data vDepthFactor = _Set(smoothSigmaDepth/(depth*depth));
+
+	_Data neighborsPlanePosDot;
+	_Data neighborsCosPlaneNormalAngle;
+	const size_t numNormals = neighborsCloseNormals.size();
+	for (auto i = 0; i < numNormals; ++i) {
+		_AsArray(neighborsPlanePosDot, i) = FastDot4(plane, neighborsCloseX[i]);
+		_AsArray(neighborsCosPlaneNormalAngle, i) = FastDot4(normal, neighborsCloseNormals[i]);
+	}
+
+	constexpr _Data vOne = {1.f, 1.f, 1.f, 1.f};
+	const _Data vFdSquared = _Mul(neighborsPlanePosDot, neighborsPlanePosDot);
+	const _Data vFdSquaredDepthFactor = _Mul(vFdSquared, vDepthFactor);
+	const _Data vExpFdSquaredDepthFactor = FastExpAlwaysNegative(vFdSquaredDepthFactor);
+	const _Data vExpFdSquaredDepthFactorBD = _Mul(vExpFdSquaredDepthFactor, vSmoothBonusDepth);
+	const _Data vScoreFactorLhs = _Sub(vOne, vExpFdSquaredDepthFactorBD);
+
+	constexpr _Data vNegOne = {-1.f, -1.f, -1.f, -1.f};
+	const _Data vAnglesClamped = FastClamp(neighborsCosPlaneNormalAngle, vNegOne, vOne);
+	const _Data vTmp = FastACos(vAnglesClamped);
+	const _Data vTmpSquared = _Mul(vTmp, vTmp);
+	const _Data vTmpSquaredvSmoothSigmaNormal = _Mul(vTmpSquared, vSmoothSigmaNormal);
+	const _Data vExpTmpSquaredvSmoothSigmaNormal = FastExpAlwaysPositive(vTmpSquaredvSmoothSigmaNormal);
+	const _Data vExpTmpSquaredvSmoothSigmaNormalBN = _Mul(vExpTmpSquaredvSmoothSigmaNormal, vSmoothBonusNormal);
+	const _Data vScoreFactorRhs = _Sub(vOne, vExpTmpSquaredvSmoothSigmaNormalBN);
+
+	_Data vScoreFactor = _Mul(vScoreFactorLhs, vScoreFactorRhs);
+	// First (only available member to initialize) is m128i_i8
+	constexpr _DataI vMasks[] = {
+		{0x00,0x00,0x00,0x00,-127,-127,-127,-127,-127,-127,-127,-127,-127,-127,-127,-127},
+		{0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,-127,-127,-127,-127,-127,-127,-127,-127},
+		{0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,-127,-127,-127,-127},
+		{0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}
+	};
+	vScoreFactor = Blend(vScoreFactor, vOne, _CastFI(vMasks[numNormals-1]));
+
+	return FastHProduct(vScoreFactor);
+}
+
+
 // run propagation and random refinement cycles;
 // the solution belonging to the target image can be also propagated
 void DepthEstimator::ProcessPixel(IDX idx)
@@ -633,7 +1148,11 @@ void DepthEstimator::ProcessPixel(IDX idx)
 	// find neighbors
 	neighbors.Empty();
 	#if DENSE_SMOOTHNESS != DENSE_SMOOTHNESS_NA
-	neighborsClose.Empty();
+	neighborsCloseNormals.clear();
+		#if DENSE_SMOOTHNESS == DENSE_SMOOTHNESS_PLANE
+		boost::container::small_vector<_Data,4> neighborsCloseX;
+		#endif
+	boost::container::small_vector<Depth,4> neighborsCloseDepths;
 	#endif
 	if (dir == LT2RB) {
 		// direction from left-top to right-bottom corner
@@ -644,11 +1163,13 @@ void DepthEstimator::ProcessPixel(IDX idx)
 				#if DENSE_SMOOTHNESS != DENSE_SMOOTHNESS_NA
 				ASSERT(ISEQUAL(norm(normalMap0(nx)), 1.f));
 				neighbors.emplace_back(nx);
-				neighborsClose.emplace_back(NeighborEstimate{ndepth,normalMap0(nx)
+				const auto& nm = normalMap0(nx);
+				neighborsCloseNormals.emplace_back(_SetN(nm[0], nm[1], nm[2], 0.f));
 					#if DENSE_SMOOTHNESS == DENSE_SMOOTHNESS_PLANE
-					, Cast<float>(image0.camera.TransformPointI2C(Point3(nx, ndepth)))
+					const auto X = Cast<float>(image0.camera.TransformPointI2C(Point3(nx, ndepth)));
+					neighborsCloseX.emplace_back(_SetN(X[0], X[1], X[2], 1.f));
 					#endif
-				});
+				neighborsCloseDepths.push_back(ndepth);
 				#else
 				neighbors.emplace_back(NeighborData{nx,ndepth,normalMap0(nx)});
 				#endif
@@ -661,11 +1182,13 @@ void DepthEstimator::ProcessPixel(IDX idx)
 				#if DENSE_SMOOTHNESS != DENSE_SMOOTHNESS_NA
 				ASSERT(ISEQUAL(norm(normalMap0(nx)), 1.f));
 				neighbors.emplace_back(nx);
-				neighborsClose.emplace_back(NeighborEstimate{ndepth,normalMap0(nx)
+				const auto& nm = normalMap0(nx);
+				neighborsCloseNormals.emplace_back(_SetN(nm[0], nm[1], nm[2], 0.f));
 					#if DENSE_SMOOTHNESS == DENSE_SMOOTHNESS_PLANE
-					, Cast<float>(image0.camera.TransformPointI2C(Point3(nx, ndepth)))
+					const auto X = Cast<float>(image0.camera.TransformPointI2C(Point3(nx, ndepth)));
+					neighborsCloseX.emplace_back(_SetN(X[0], X[1], X[2], 1.f));
 					#endif
-				});
+				neighborsCloseDepths.push_back(ndepth);
 				#else
 				neighbors.emplace_back(NeighborData{nx,ndepth,normalMap0(nx)});
 				#endif
@@ -677,11 +1200,13 @@ void DepthEstimator::ProcessPixel(IDX idx)
 			const Depth ndepth(depthMap0(nx));
 			if (ndepth > 0) {
 				ASSERT(ISEQUAL(norm(normalMap0(nx)), 1.f));
-				neighborsClose.emplace_back(NeighborEstimate{ndepth,normalMap0(nx)
+				const auto& nm = normalMap0(nx);
+				neighborsCloseNormals.emplace_back(_SetN(nm[0], nm[1], nm[2], 0.f));
 					#if DENSE_SMOOTHNESS == DENSE_SMOOTHNESS_PLANE
-					, Cast<float>(image0.camera.TransformPointI2C(Point3(nx, ndepth)))
+					const auto X = Cast<float>(image0.camera.TransformPointI2C(Point3(nx, ndepth)));
+					neighborsCloseX.emplace_back(_SetN(X[0], X[1], X[2], 1.f));
 					#endif
-				});
+				neighborsCloseDepths.push_back(ndepth);
 			}
 		}
 		if (x0.y < size.height-nSizeHalfWindow) {
@@ -689,11 +1214,13 @@ void DepthEstimator::ProcessPixel(IDX idx)
 			const Depth ndepth(depthMap0(nx));
 			if (ndepth > 0) {
 				ASSERT(ISEQUAL(norm(normalMap0(nx)), 1.f));
-				neighborsClose.emplace_back(NeighborEstimate{ndepth,normalMap0(nx)
+				const auto& nm = normalMap0(nx);
+				neighborsCloseNormals.emplace_back(_SetN(nm[0], nm[1], nm[2], 0.f));
 					#if DENSE_SMOOTHNESS == DENSE_SMOOTHNESS_PLANE
-					, Cast<float>(image0.camera.TransformPointI2C(Point3(nx, ndepth)))
+					const auto X = Cast<float>(image0.camera.TransformPointI2C(Point3(nx, ndepth)));
+					neighborsCloseX.emplace_back(_SetN(X[0], X[1], X[2], 1.f));
 					#endif
-				});
+				neighborsCloseDepths.push_back(ndepth);
 			}
 		}
 		#endif
@@ -707,11 +1234,13 @@ void DepthEstimator::ProcessPixel(IDX idx)
 				#if DENSE_SMOOTHNESS != DENSE_SMOOTHNESS_NA
 				ASSERT(ISEQUAL(norm(normalMap0(nx)), 1.f));
 				neighbors.emplace_back(nx);
-				neighborsClose.emplace_back(NeighborEstimate{ndepth,normalMap0(nx)
+				const auto& nm = normalMap0(nx);
+				neighborsCloseNormals.emplace_back(_SetN(nm[0], nm[1], nm[2], 0.f));
 					#if DENSE_SMOOTHNESS == DENSE_SMOOTHNESS_PLANE
-					, Cast<float>(image0.camera.TransformPointI2C(Point3(nx, ndepth)))
+					const auto X = Cast<float>(image0.camera.TransformPointI2C(Point3(nx, ndepth)));
+					neighborsCloseX.emplace_back(_SetN(X[0], X[1], X[2], 1.f));
 					#endif
-				});
+				neighborsCloseDepths.push_back(ndepth);
 				#else
 				neighbors.emplace_back(NeighborData{nx,ndepth,normalMap0(nx)});
 				#endif
@@ -724,11 +1253,13 @@ void DepthEstimator::ProcessPixel(IDX idx)
 				#if DENSE_SMOOTHNESS != DENSE_SMOOTHNESS_NA
 				ASSERT(ISEQUAL(norm(normalMap0(nx)), 1.f));
 				neighbors.emplace_back(nx);
-				neighborsClose.emplace_back(NeighborEstimate{ndepth,normalMap0(nx)
+				const auto& nm = normalMap0(nx);
+				neighborsCloseNormals.emplace_back(_SetN(nm[0], nm[1], nm[2], 0.f));
 					#if DENSE_SMOOTHNESS == DENSE_SMOOTHNESS_PLANE
-					, Cast<float>(image0.camera.TransformPointI2C(Point3(nx, ndepth)))
+					const auto X = Cast<float>(image0.camera.TransformPointI2C(Point3(nx, ndepth)));
+					neighborsCloseX.emplace_back(_SetN(X[0], X[1], X[2], 1.f));
 					#endif
-				});
+				neighborsCloseDepths.push_back(ndepth);
 				#else
 				neighbors.emplace_back(NeighborData{nx,ndepth,normalMap0(nx)});
 				#endif
@@ -740,11 +1271,13 @@ void DepthEstimator::ProcessPixel(IDX idx)
 			const Depth ndepth(depthMap0(nx));
 			if (ndepth > 0) {
 				ASSERT(ISEQUAL(norm(normalMap0(nx)), 1.f));
-				neighborsClose.emplace_back(NeighborEstimate{ndepth,normalMap0(nx)
+				const auto& nm = normalMap0(nx);
+				neighborsCloseNormals.emplace_back(_SetN(nm[0], nm[1], nm[2], 0.f));
 					#if DENSE_SMOOTHNESS == DENSE_SMOOTHNESS_PLANE
-					, Cast<float>(image0.camera.TransformPointI2C(Point3(nx, ndepth)))
+					const auto X = Cast<float>(image0.camera.TransformPointI2C(Point3(nx, ndepth)));
+					neighborsCloseX.emplace_back(_SetN(X[0], X[1], X[2], 1.f));
 					#endif
-				});
+				neighborsCloseDepths.push_back(ndepth);
 			}
 		}
 		if (x0.y > nSizeHalfWindow) {
@@ -752,11 +1285,13 @@ void DepthEstimator::ProcessPixel(IDX idx)
 			const Depth ndepth(depthMap0(nx));
 			if (ndepth > 0) {
 				ASSERT(ISEQUAL(norm(normalMap0(nx)), 1.f));
-				neighborsClose.emplace_back(NeighborEstimate{ndepth,normalMap0(nx)
+				const auto& nm = normalMap0(nx);
+				neighborsCloseNormals.emplace_back(_SetN(nm[0], nm[1], nm[2], 0.f));
 					#if DENSE_SMOOTHNESS == DENSE_SMOOTHNESS_PLANE
-					, Cast<float>(image0.camera.TransformPointI2C(Point3(nx, ndepth)))
+					const auto X = Cast<float>(image0.camera.TransformPointI2C(Point3(nx, ndepth)));
+					neighborsCloseX.emplace_back(_SetN(X[0], X[1], X[2], 1.f));
 					#endif
-				});
+				neighborsCloseDepths.push_back(ndepth);
 			}
 		}
 		#endif
@@ -777,23 +1312,30 @@ void DepthEstimator::ProcessPixel(IDX idx)
 	#endif
 		if (confMap0(nx) >= OPTDENSE::fNCCThresholdKeep)
 			continue;
+		// I believe only the #if DENSE_SMOOTHNESS != DENSE_SMOOTHNESS_NA works properly.
 		#if DENSE_SMOOTHNESS != DENSE_SMOOTHNESS_NA
-		NeighborEstimate neighbor = neighborsClose[n];
+		_Data neighborNormal = neighborsCloseNormals[n];
 		#endif
-		neighbor.depth = InterpolatePixel(nx, neighbor.depth, neighbor.normal);
-		CorrectNormal(neighbor.normal);
-		ASSERT(neighbor.depth > 0 && neighbor.normal.dot(viewDir) <= 0);
+		Normal nn = Normal(_AsArray(neighborNormal, 0), _AsArray(neighborNormal, 1), _AsArray(neighborNormal, 2));
+		Depth neighborDepth = InterpolatePixel(nx, neighborsCloseDepths[n], nn);
+		CorrectNormal(nn);
+		//ASSERT(neighbor.depth > 0 && neighbor.normal.dot(viewDir) <= 0);
+		float scoreFactor = 1.f; // Default
 		#if DENSE_SMOOTHNESS == DENSE_SMOOTHNESS_PLANE
-		InitPlane(neighbor.depth, neighbor.normal);
+		if (!neighborsCloseNormals.empty()) {
+			InitPlane(neighborDepth, nn);
+			scoreFactor = CalculateScoreFactor(neighborNormal, neighborDepth, neighborsCloseX.data());
+		}
 		#endif
-		const float nconf(ScorePixel(neighbor.depth, neighbor.normal));
+		const float nconf(ScorePixel(neighborDepth, nn, scoreFactor));
 		ASSERT(nconf >= 0 && nconf <= 2);
 		if (conf > nconf) {
 			conf = nconf;
-			depth = neighbor.depth;
-			normal = neighbor.normal;
+			depth = neighborDepth;
+			normal = Normal(_AsArray(neighborNormal, 0), _AsArray(neighborNormal, 1), _AsArray(neighborNormal, 2));
 		}
 	}
+
 	// try random values around the current estimate in order to refine it
 	unsigned idxScaleRange(0);
 	RefineIters:
@@ -804,7 +1346,7 @@ void DepthEstimator::ProcessPixel(IDX idx)
 	else if (conf >= thConfRand) {
 		// try completely random values in order to find an initial estimate
 		#if DENSE_SMOOTHNESS != DENSE_SMOOTHNESS_NA
-		neighborsClose.Empty();
+		neighborsCloseNormals.clear();
 		#endif
 		for (unsigned iter=0; iter<OPTDENSE::nRandomIters; ++iter) {
 			const Depth ndepth(RandomDepth(dMinSqr, dMaxSqr));
@@ -834,10 +1376,14 @@ void DepthEstimator::ProcessPixel(IDX idx)
 		Dir2Normal(np, nnormal);
 		if (nnormal.dot(viewDir) >= 0)
 			continue;
+		float scoreFactor = 1.f;
 		#if DENSE_SMOOTHNESS == DENSE_SMOOTHNESS_PLANE
-		InitPlane(ndepth, nnormal);
+		if (!neighborsCloseNormals.empty()) {
+			InitPlane(ndepth, nnormal);
+			scoreFactor = CalculateScoreFactor(_SetN(nnormal[0], nnormal[1], nnormal[2], 0.f), ndepth, neighborsCloseX.data());
+		}
 		#endif
-		const float nconf(ScorePixel(ndepth, nnormal));
+		const float nconf(ScorePixel(ndepth, nnormal, scoreFactor));
 		ASSERT(nconf >= 0);
 		if (conf > nconf) {
 			conf = nconf;
@@ -959,12 +1505,11 @@ Depth DepthEstimator::InterpolatePixel(const ImageRef& nx, Depth depth, const No
 // compute plane defined by current depth and normal estimate
 void DepthEstimator::InitPlane(Depth depth, const Normal& normal)
 {
-	#if 0
+#if 0
 	plane.Set(normal, Normal(Cast<float>(X0)*depth));
-	#else
-	plane.m_vN = normal;
-	plane.m_fD = -depth*normal.dot(Cast<float>(X0));
-	#endif
+#else
+	plane = _SetN(normal[0], normal[1], normal[2], -depth*normal.dot(Cast<float>(X0)));
+#endif
 }
 #endif
 

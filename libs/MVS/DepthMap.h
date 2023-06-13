@@ -35,8 +35,9 @@
 
 // I N C L U D E S /////////////////////////////////////////////////
 
+#include "P2PUtils.h"
 #include "PointCloud.h"
-
+#include <boost/container/small_vector.hpp>
 
 // D E F I N E S ///////////////////////////////////////////////////
 
@@ -68,6 +69,22 @@
 #define DENSE_EXP_DEFUALT EXP
 #define DENSE_EXP_FAST FEXP<true> // ~10% faster, but slightly less precise
 #define DENSE_EXP DENSE_EXP_DEFUALT
+
+#define USE_FLOAT_SCORING_ACCURACY
+
+#ifdef USE_FLOAT_SCORING_ACCURACY
+using Calc_t = float;
+using Vec2_t = Vec2f;
+using Vec3_t = Vec3f;
+using Matx13_t = cv::Matx13f;
+using Matrix3x3_t = Matrix3x3f;
+#else
+using Calc_t = double;
+using Vec2_t = Vec2;
+using Vec3_t = Vec3;
+using Matx13_t = cv::Matx13d;
+using Matrix3x3_t = Matrix3x3;
+#endif
 
 #define ComposeDepthFilePath(i, e) MAKE_PATH(String::FormatString(("depth%04u." + String(e)).c_str(), i))
 
@@ -144,14 +161,46 @@ typedef TImage<ViewsID> ViewsMap;
 
 template <int nTexels>
 struct WeightedPatchFix {
-	struct Pixel {
-		float weight;
-		float tempWeight;
-	};
-	Pixel weights[nTexels];
+	float pixelWeights[nTexels];
+	float pixelTempWeights[nTexels];
 	float sumWeights;
 	float normSq0;
 	WeightedPatchFix() : normSq0(0) {}
+};
+
+struct Mat44
+{
+	_Data vRows[4];
+
+	void SetIdentity()
+	{
+		vRows[0] = _SetN(1.f, 0.f, 0.f, 0.f);
+		vRows[1] = _SetN(0.f, 1.f, 0.f, 0.f);
+		vRows[2] = _SetN(0.f, 0.f, 1.f, 0.f);
+		vRows[3] = _SetN(0.f, 0.f, 0.f, 1.f);
+	}
+
+	void SetRow(int row, _Data v)
+	{
+		vRows[row] = v;
+	}
+
+	_Data Mul44Vec3(_Data v) const noexcept
+	{
+		// Multiply 4x4 by Vec3
+		const _Data vX = _Splat(v, 0);
+		const _Data vY = _Splat(v, 1);
+		const _Data vZ = _Splat(v, 2);
+
+		const _Data vRow1 = _Mul(vRows[0], vX);
+		const _Data vRow2 = _Mul(vRows[1], vY);
+		const _Data vRow3 = _Mul(vRows[2], vZ);
+
+		const _Data vRow12 = _Add(vRow1, vRow2);
+		const _Data vRow23 = _Add(vRow3, vRows[3]);
+
+		return _Add(vRow12, vRow23);
+	}
 };
 
 struct MVS_API DepthData {
@@ -161,9 +210,9 @@ struct MVS_API DepthData {
 		Image32F image; // image float intensities
 		Image* pImageData; // image data
 
-		Matrix3x3 Hl; //
-		Vec3 Hm;      // constants during per-pixel loops
-		Matrix3x3 Hr; //
+		Matrix3x3_t Hl; //
+		Vec3_t Hm;      // constants during per-pixel loops
+		Matrix3x3_t Hr; //
 
 		DepthMap depthMap; // known depth-map (optional)
 		Camera cameraDepthMap; // camera matrix corresponding to the depth-map
@@ -171,6 +220,7 @@ struct MVS_API DepthData {
 		Point3f Tm;    // constants during per-pixel geometric-consistent loops
 		Matrix3x3f Tr; //
 		Point3f Tn;    //
+		Mat44 Tr4;
 
 		inline void Init(const Camera& cameraRef) {
 			Hl = camera.K * camera.R * cameraRef.R.t();
@@ -181,6 +231,13 @@ struct MVS_API DepthData {
 				Tm = cameraDepthMap.K * cameraDepthMap.R * (cameraRef.C - cameraDepthMap.C);
 				Tr = cameraRef.K * cameraRef.R * cameraDepthMap.R.t() * cameraDepthMap.GetInvK();
 				Tn = cameraRef.K * cameraRef.R * (cameraDepthMap.C - cameraRef.C);
+
+				// Tr4 is Tr/Tn for SIMD.
+				Tr4.SetIdentity();
+				Tr4.SetRow(0, _SetN(Tr(0,0), Tr(1,0), Tr(2,0), 0.f));
+				Tr4.SetRow(1, _SetN(Tr(0,1), Tr(1,1), Tr(2,1), 0.f));
+				Tr4.SetRow(2, _SetN(Tr(0,2), Tr(1,2), Tr(2,2), 0.f));
+				Tr4.SetRow(3, _SetN(Tn[0], Tn[1], Tn[2], 0.f));
 			}
 		}
 
@@ -290,26 +347,19 @@ struct MVS_API DepthEstimator {
 	typedef CLISTDEF0(MapRef) MapRefArr;
 
 	typedef Eigen::Matrix<float,nTexels,1> TexelVec;
+#pragma pack(push, 1)
 	struct NeighborData {
 		ImageRef x;
 		Depth depth;
 		Normal normal;
 	};
-	#if DENSE_SMOOTHNESS != DENSE_SMOOTHNESS_NA
-	struct NeighborEstimate {
-		Depth depth;
-		Normal normal;
-		#if DENSE_SMOOTHNESS == DENSE_SMOOTHNESS_PLANE
-		Planef::POINT X;
-		#endif
-	};
-	#endif
 	#if DENSE_REFINE == DENSE_REFINE_EXACT
 	struct PixelEstimate {
 		Depth depth;
 		Normal normal;
 	};
 	#endif
+#pragma pack(pop)
 
 	#if DENSE_NCC == DENSE_NCC_WEIGHTED
 	typedef WeightedPatchFix<nTexels> Weight;
@@ -325,10 +375,12 @@ struct MVS_API DepthEstimator {
 	CLISTDEF0IDX(ImageRef,IIndex) neighbors; // neighbor pixels coordinates to be processed
 	#endif
 	#if DENSE_SMOOTHNESS != DENSE_SMOOTHNESS_NA
-	CLISTDEF0IDX(NeighborEstimate,IIndex) neighborsClose; // close neighbor pixel depths to be used for smoothing
+	boost::container::small_vector<_Data,4> neighborsCloseNormals;
 	#endif
 	Point3 X0;	      //
 	ImageRef x0;	  // constants during one pixel loop
+	Weight* pWeightMap;
+	Vec2_t x0ULPatchCorner;
 	float normSq0;	  //
 	#if DENSE_NCC != DENSE_NCC_WEIGHTED
 	TexelVec texels0; //
@@ -342,8 +394,8 @@ struct MVS_API DepthEstimator {
 	Eigen::VectorXf scores;
 	#endif
 	#if DENSE_SMOOTHNESS == DENSE_SMOOTHNESS_PLANE
-	Planef plane; // plane defined by current depth and normal estimate
-	#endif
+	_Data plane; // plane defined by current depth and normal estimate
+#endif
 	DepthMap& depthMap0;
 	NormalMap& normalMap0;
 	ConfidenceMap& confMap0;
@@ -378,8 +430,58 @@ struct MVS_API DepthEstimator {
 
 	bool PreparePixelPatch(const ImageRef&);
 	bool FillPixelPatch();
-	float ScorePixelImage(const DepthData::ViewData& image1, Depth, const Normal&);
-	float ScorePixel(Depth, const Normal&);
+
+	struct ScoreHelper
+	{
+		ScoreHelper(
+			Depth depth,
+			const Matx13_t& mat,
+			const float scoreFactor,
+			const Eigen::Vector4f& depthMapPt,
+			bool lowResDepthMapEmpty
+		) :
+			mDepth(depth),
+			mMat(mat),
+			mScoreFactor(scoreFactor),
+			mDepthMapPt(depthMapPt),
+			mLowResDepthMapEmpty(lowResDepthMapEmpty)
+		{
+			vMat0 = _mm_set1_pd(mat(0));
+			vMat1 = _mm_set1_pd(mat(1));
+			vMat2 = _mm_set1_pd(mat(2));
+			vMat01 = _mm_set_pd(mat(0), mat(1));
+		}
+
+		Depth mDepth;
+		Matx13_t mMat;
+		float mScoreFactor;
+		Eigen::Vector4f mDepthMapPt;
+		bool mLowResDepthMapEmpty;
+
+		__m128d vMat0;
+		__m128d vMat1;
+		__m128d vMat2;
+		__m128d vMat01;
+		_Data mVX;
+		_Data mVBasisH;
+		_Data mVBasisV;
+		_Data mVImageWidthWithBorder;
+		_Data mVImageHeightWithBorder;
+	};
+
+	bool IsScorable(
+		const DepthData::ViewData& image1,
+		ScoreHelper& sh
+	);
+
+	float ScorePixelImage(
+		bool& deferred,
+		_Data& deferredResult,
+		const DepthData::ViewData& image1,
+		const ScoreHelper& sh
+	);
+	float ScorePixel(Depth depth, const Normal&, float scoreFactor = 1.f);
+	float DepthEstimator::CalculateScoreFactor(_Data normal, float depth, _Data* neighborsCloseX);
 	void ProcessPixel(IDX idx);
 	Depth InterpolatePixel(const ImageRef&, Depth, const Normal&) const;
 	#if DENSE_SMOOTHNESS == DENSE_SMOOTHNESS_PLANE
@@ -410,17 +512,6 @@ struct MVS_API DepthEstimator {
 		return DENSE_EXP(wColor+wSpatial);
 	}
 	#endif
-
-	inline Matrix3x3f ComputeHomographyMatrix(const DepthData::ViewData& img, Depth depth, const Normal& normal) const {
-		#if 0
-		// compute homography matrix
-		const Matrix3x3f H(img.camera.K*HomographyMatrixComposition(image0.camera, img.camera, Vec3(normal), Vec3(X0*depth))*image0.camera.K.inv());
-		#else
-		// compute homography matrix as above, caching some constants
-		const Vec3 n(normal);
-		return (img.Hl + img.Hm * (n.t()*INVERT(n.dot(X0)*depth))) * img.Hr;
-		#endif
-	}
 
 	static inline Point3 ComputeRelativeC(const DepthData& depthData) {
 		return depthData.images[1].camera.R*(depthData.images[0].camera.C-depthData.images[1].camera.C);

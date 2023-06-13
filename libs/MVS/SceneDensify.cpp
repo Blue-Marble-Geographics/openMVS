@@ -484,28 +484,40 @@ bool DepthMapsData::InitDepthMap(DepthData& depthData)
 void* STCALL DepthMapsData::ScoreDepthMapTmp(void* arg)
 {
 	DepthEstimator& estimator = *((DepthEstimator*)arg);
-	IDX idx;
-	while ((idx=(IDX)Thread::safeInc(estimator.idxPixel)) < estimator.coords.GetSize()) {
-		const ImageRef& x = estimator.coords[idx];
-		if (!estimator.PreparePixelPatch(x) || !estimator.FillPixelPatch()) {
-			estimator.depthMap0(x) = 0;
-			estimator.normalMap0(x) = Normal::ZERO;
-			estimator.confMap0(x) = 2.f;
-			continue;
+
+	// Process groups of chunkSize pixels at once to reduce threading overhead.
+	constexpr LONG chunkSize = 10000;
+	const IDX idxCount = estimator.coords.GetSize();
+
+	while (1) {
+		IDX idxStart=((IDX)Thread::safeInc(estimator.idxPixel)) * chunkSize;
+		if (idxStart >= idxCount) {
+			break;
 		}
-		Depth& depth = estimator.depthMap0(x);
-		Normal& normal = estimator.normalMap0(x);
-		const Normal viewDir(Cast<float>(static_cast<const Point3&>(estimator.X0)));
-		if (!ISINSIDE(depth, estimator.dMin, estimator.dMax)) {
-			// init with random values
-			depth = estimator.RandomDepth(estimator.dMinSqr, estimator.dMaxSqr);
-			normal = estimator.RandomNormal(viewDir);
-		} else if (normal.dot(viewDir) >= 0) {
-			// replace invalid normal with random values
-			normal = estimator.RandomNormal(viewDir);
+		size_t count = std::min((size_t) chunkSize,idxCount-idxStart)+1;
+
+		for (auto i = idxStart; --count; ++i) {
+			const ImageRef& x = estimator.coords[i];
+			if (!estimator.PreparePixelPatch(x) || !estimator.FillPixelPatch()) {
+				estimator.depthMap0(x) = 0;
+				estimator.normalMap0(x) = Normal::ZERO;
+				estimator.confMap0(x) = 2.f;
+				continue;
+			}
+			Depth& depth = estimator.depthMap0(x);
+			Normal& normal = estimator.normalMap0(x);
+			const Normal viewDir(Cast<float>(static_cast<const Point3&>(estimator.X0)));
+			if (!ISINSIDE(depth, estimator.dMin, estimator.dMax)) {
+				// init with random values
+				depth = estimator.RandomDepth(estimator.dMinSqr, estimator.dMaxSqr);
+				normal = estimator.RandomNormal(viewDir);
+			} else if (normal.dot(viewDir) >= 0) {
+				// replace invalid normal with random values
+				normal = estimator.RandomNormal(viewDir);
+			}
+			ASSERT(ISEQUAL(norm(normal), 1.f));
+			estimator.confMap0(x) = estimator.ScorePixel(depth, normal);
 		}
-		ASSERT(ISEQUAL(norm(normal), 1.f));
-		estimator.confMap0(x) = estimator.ScorePixel(depth, normal);
 	}
 	return NULL;
 }
@@ -513,6 +525,10 @@ void* STCALL DepthMapsData::ScoreDepthMapTmp(void* arg)
 void* STCALL DepthMapsData::EstimateDepthMapTmp(void* arg)
 {
 	DepthEstimator& estimator = *((DepthEstimator*)arg);
+
+	// ProcessPixel can read neighbor information without synchronization
+	// which appears to alter the output when the threading changes.
+	// Thus we preserve the original thread handling (non-chunked).
 	IDX idx;
 	while ((idx=(IDX)Thread::safeInc(estimator.idxPixel)) < estimator.coords.GetSize())
 		estimator.ProcessPixel(idx);
@@ -522,48 +538,60 @@ void* STCALL DepthMapsData::EstimateDepthMapTmp(void* arg)
 void* STCALL DepthMapsData::EndDepthMapTmp(void* arg)
 {
 	DepthEstimator& estimator = *((DepthEstimator*)arg);
-	IDX idx;
+
+	// Process groups of chunkSize pixels at once to reduce threading overhead.
+	constexpr LONG chunkSize = 10000;
+	const IDX idxCount = estimator.coords.GetSize();
 	MAYBEUNUSED const float fOptimAngle(FD2R(OPTDENSE::fOptimAngle));
-	while ((idx=(IDX)Thread::safeInc(estimator.idxPixel)) < estimator.coords.GetSize()) {
-		const ImageRef& x = estimator.coords[idx];
-		ASSERT(estimator.depthMap0(x) >= 0);
-		Depth& depth = estimator.depthMap0(x);
-		float& conf = estimator.confMap0(x);
-		// check if the score is good enough
-		// and that the cross-estimates is close enough to the current estimate
-		if (depth <= 0 || conf >= OPTDENSE::fNCCThresholdKeep) {
-			conf = 0;
-			depth = 0;
-			estimator.normalMap0(x) = Normal::ZERO;
-		} else {
-			#if 1
-			// converted ZNCC [0-2] score, where 0 is best, to [0-1] confidence, where 1 is best
-			conf = conf>=1.f ? 0.f : 1.f-conf;
-			#else
-			#if 1
-			FOREACH(i, estimator.images)
-				estimator.scores[i] = ComputeAngle<REAL,float>(estimator.image0.camera.TransformPointI2W(Point3(x,depth)).ptr(), estimator.image0.camera.C.ptr(), estimator.images[i].view.camera.C.ptr());
-			#if DENSE_AGGNCC == DENSE_AGGNCC_NTH
-			const float fCosAngle(estimator.scores.GetNth(estimator.idxScore));
-			#elif DENSE_AGGNCC == DENSE_AGGNCC_MEAN
-			const float fCosAngle(estimator.scores.mean());
-			#elif DENSE_AGGNCC == DENSE_AGGNCC_MIN
-			const float fCosAngle(estimator.scores.minCoeff());
-			#else
-			const float fCosAngle(estimator.idxScore ?
-				std::accumulate(estimator.scores.begin(), &estimator.scores.PartialSort(estimator.idxScore), 0.f) / estimator.idxScore :
-				*std::min_element(estimator.scores.cbegin(), estimator.scores.cend()));
-			#endif
-			const float wAngle(MINF(POW(ACOS(fCosAngle)/fOptimAngle,1.5f),1.f));
-			#else
-			const float wAngle(1.f);
-			#endif
-			#if 1
-			conf = wAngle/MAXF(conf,1e-2f);
-			#else
-			conf = wAngle/(depth*SQUARE(MAXF(conf,1e-2f)));
-			#endif
-			#endif
+
+	while (1) {
+		IDX idxStart=((IDX)Thread::safeInc(estimator.idxPixel)) * chunkSize;
+		if (idxStart >= idxCount) {
+			break;
+		}
+		size_t count = std::min((size_t) chunkSize,idxCount-idxStart)+1;
+
+		for (auto i = idxStart; --count; ++i) {
+			const ImageRef& x = estimator.coords[i];
+			ASSERT(estimator.depthMap0(x) >= 0);
+			Depth& depth = estimator.depthMap0(x);
+			float& conf = estimator.confMap0(x);
+			// check if the score is good enough
+			// and that the cross-estimates is close enough to the current estimate
+			if (depth <= 0 || conf >= OPTDENSE::fNCCThresholdKeep) {
+				conf = 0;
+				depth = 0;
+				estimator.normalMap0(x) = Normal::ZERO;
+			} else {
+				#if 1
+				// converted ZNCC [0-2] score, where 0 is best, to [0-1] confidence, where 1 is best
+				conf = conf>=1.f ? 0.f : 1.f-conf;
+				#else
+				#if 1
+				FOREACH(i, estimator.images)
+					estimator.scores[i] = ComputeAngle<REAL,float>(estimator.image0.camera.TransformPointI2W(Point3(x,depth)).ptr(), estimator.image0.camera.C.ptr(), estimator.images[i].view.camera.C.ptr());
+				#if DENSE_AGGNCC == DENSE_AGGNCC_NTH
+				const float fCosAngle(estimator.scores.GetNth(estimator.idxScore));
+				#elif DENSE_AGGNCC == DENSE_AGGNCC_MEAN
+				const float fCosAngle(estimator.scores.mean());
+				#elif DENSE_AGGNCC == DENSE_AGGNCC_MIN
+				const float fCosAngle(estimator.scores.minCoeff());
+				#else
+				const float fCosAngle(estimator.idxScore ?
+					std::accumulate(estimator.scores.begin(), &estimator.scores.PartialSort(estimator.idxScore), 0.f) / estimator.idxScore :
+					*std::min_element(estimator.scores.cbegin(), estimator.scores.cend()));
+				#endif
+				const float wAngle(MINF(POW(ACOS(fCosAngle)/fOptimAngle,1.5f),1.f));
+				#else
+				const float wAngle(1.f);
+				#endif
+				#if 1
+				conf = wAngle/MAXF(conf,1e-2f);
+				#else
+				conf = wAngle/(depth*SQUARE(MAXF(conf,1e-2f)));
+				#endif
+				#endif
+			}
 		}
 	}
 	return NULL;
@@ -1936,6 +1964,9 @@ void* DenseReconstructionEstimateTmp(void* arg) {
 // initialize the dense reconstruction with the sparse point cloud
 void Scene::DenseReconstructionEstimate(void* pData)
 {
+	// JPB WIP OPT All of these are running single threaded... including the saving of maps
+	// It may call into new routines, say estimatedepthmap, which uses multithreading, but this part is likely very slow.
+
 	DenseDepthMapData& data = *((DenseDepthMapData*)pData);
 	while (true) {
 		CAutoPtr<Event> evt(data.events.GetEvent());
