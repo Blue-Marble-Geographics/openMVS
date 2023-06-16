@@ -851,7 +851,7 @@ float DepthEstimator::ScorePixelImage(
 					_Data vX1Z = _Set(X1z);
 					//x0y0, x1y0, x0y1, x1y1);
 					constexpr _Data vSmall = {0.03f, 0.03f, 0.03f, 0.03f};
-					const auto vCmp = _CmpLT(_Sub(vX1Z, vSamples), _Mul(vX1Z, vSmall));
+					const auto vCmp = _CmpLT(FastAbs(_Sub(vX1Z, vSamples)), _Mul(vX1Z, vSmall));
 
 					if (!AllZerosI(_CastIF(vCmp))) { // b00 | b10 | b01 | b11) {
 						const float sx = X1PxAsFloat - ((float) X1PAsInt);
