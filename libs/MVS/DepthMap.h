@@ -70,7 +70,7 @@
 #define DENSE_EXP_FAST FEXP<true> // ~10% faster, but slightly less precise
 #define DENSE_EXP DENSE_EXP_DEFUALT
 
-#undef USE_FLOAT_SCORING_ACCURACY
+#define USE_FLOAT_SCORING_ACCURACY
 
 #ifdef USE_FLOAT_SCORING_ACCURACY
 using Calc_t = float;
