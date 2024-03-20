@@ -145,12 +145,12 @@ Planef PointCloud::EstimateGroundPlane(const ImageArr& images, float planeThresh
 	const PointArr* pPoints;
 	if (GetSize() > randMinPoints) {
 		#ifndef _RELEASE
-		SEACAVE::Random rnd(SEACAVE::Random::default_seed);
+		SEACAVE::Random rnd(SEACAVE::Random::default_seed());
 		#else
 		SEACAVE::Random rnd;
 		#endif
 		const REAL randPointsRatio(MAXF(REAL(1e-4),(REAL)randMinPoints/GetSize()));
-		const SEACAVE::Random::result_type randPointsTh(CEIL2INT<SEACAVE::Random::result_type>(randPointsRatio*SEACAVE::Random::max()));
+		const SEACAVE::Random::result_type randPointsTh(CEIL2INT<SEACAVE::Random::result_type>(randPointsRatio*rnd.max()));
 		workPoints.reserve(CEIL2INT<PointArr::IDX>(randPointsRatio*GetSize()));
 		for (const Point& X: points)
 			if (rnd() <= randPointsTh)

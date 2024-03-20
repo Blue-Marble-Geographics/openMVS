@@ -2203,6 +2203,16 @@ public:
 	bool Save(const String&) const;
 	void Show(const String& winname, int delay=0, bool bDestroy=true) const;
 
+	__forceinline TYPE& pix(const ImageRef& pt)
+	{
+		return ((TYPE*)(data + step.p[0] * pt.y))[pt.x];
+	}
+
+	__forceinline const TYPE& pix(const ImageRef& pt) const
+	{
+		return ((const TYPE*)(data + step.p[0] * pt.y))[pt.x];
+	}
+
 	#ifdef _USE_BOOST
 	// serialize
 	template <class Archive>

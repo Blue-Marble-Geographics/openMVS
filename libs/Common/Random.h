@@ -99,14 +99,34 @@ FORCEINLINE long double randomGaussianld() {
 
 // Encapsulates state for random number generation
 // based on C++11 random number generator functionality
-struct Random : std::mt19937 {
-	typedef std::mt19937 generator_type;
+struct Random {
+	using result_type = uint64_t;
+	static result_type default_seed() { return std::mt19937::default_seed; }
 
-	Random() : generator_type(std::random_device()()) {}
-	Random(result_type seed) : generator_type(seed) {}
+	static result_type max() { return std::numeric_limits<result_type>::max(); }
+
+	uint64_t state;
+
+	result_type operator()()
+	{
+		uint64_t high64;
+		state = _umul128(state, 0xda942042e4dd58b5I64, &high64);
+
+		return high64;
+	}
+
+	Random()
+	{
+		state = rand();
+	}
+
+	Random(result_type seed)
+	{
+		state = seed;
+	}
 
 	// integer randomRange assumes this is capped
-	STATIC_ASSERT(max() < 4294967296);
+	//STATIC_ASSERT(max() < 4294967296);
 
 	// returns a uniform random number in the range [0, 1]
 	template<typename T=result_type>

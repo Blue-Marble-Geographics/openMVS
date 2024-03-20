@@ -54,6 +54,7 @@
 #define _ConvertFI _mm_cvtepi32_ps
 #define _ConvertIF _mm_cvtps_epi32
 #define _TruncateIF _mm_cvttps_epi32
+#define _CmpEQ(a,b) _mm_cmpeq_ps(a, b)
 #define _CmpGE(a,b) _mm_cmpge_ps(a, b)
 #define _CmpGT(a,b) _mm_cmpgt_ps(a, b)
 #define _CmpLT(a,b) _mm_cmplt_ps(a, b)
@@ -62,6 +63,11 @@
 #define _CmpGTI(a,b) _mm_cmpgt_epi32(a, b)
 #define _Set _mm_set1_ps
 #define _SetZero _mm_setzero_ps
+// JPB WIP BUG Using MSVC 17.6.4, _mm_set_ss doesn't always keep the
+// other registers clear.
+// https://developercommunity.visualstudio.com/t/1923282002-_mm_set_ss-does-not-zero/949051?space=8&q=refactor+top-level
+// This should be retested
+#define _SetFirstUnsafe _mm_set_ss
 #define _SetN(a,b,c,d) _mm_set_ps((d),(c),(b),(a))
 #define _SetNDeltas(a,b) _SetN((a), ((a)+(b)), (a)+(b)*2.f, (a)+(b)*3.f)
 #define _SetNMemory(a,b) _SetN((a)[0], (a)[b], (a)[2*(b)], (a)[3*(b)])
@@ -102,7 +108,7 @@
 #define _AsArrayI(name, i) (name.m128i_i32[i])
 #define _AsArrayS(name, i) (name.m128i_i16[i])
 
-#if 1 //def __SSE4_1__ JPB WIP BUG
+#ifdef __SSE4_1__
 #include <smmintrin.h>
 #define _Floor _mm_floor_ps
 #endif
@@ -118,6 +124,7 @@
 #undef _ConvertFI
 #undef _ConvertIF
 #undef _TruncateIF
+#undef _CmpEQ
 #undef _CmpGE
 #undef _CmpGT
 #undef _CmpLT
@@ -176,6 +183,7 @@
 #define _ConvertFI _mm256_cvtepi32_ps
 #define _ConvertIF _mm256_cvtps_epi32
 #define _TruncateIF _mm256_cvttps_epi32
+#define _CmpEQ(a,b) _mm256_cmp_ps(a, b, _CMP_EQ_OS)
 #define _CmpGE(a,b) _mm256_cmp_ps(a, b, _CMP_GE_OS)
 #define _CmpGT(a,b) _mm256_cmp_ps(a, b, _CMP_GT_OS)
 #define _CmpLT(a,b) _mm256_cmp_ps(a, b, _CMP_LT_OS)
@@ -229,15 +237,29 @@
 #include <immintrin.h>
 #endif // __AVX2__
 
+#ifdef _DEBUG
+#define _Uninitialized(a) _Data a = _SetZero();
+#else
+#define _Uninitialized(a) _Data a;
+#endif
 #define _AddI3(a,b,c) _AddI((a),_AddI((b),(c)))
 
-static __forceinline  float FastExpS(float x)
+// Remember, we can trivially initialize anything besides the first union member.
+const extern __declspec( selectany ) _DataI vMask3 = { 0xFFi8, 0xFFi8, 0xFFi8, 0xFFi8, 0xFFi8, 0xFFi8, 0xFFi8, 0xFFi8, 0xFFi8, 0xFFi8, 0xFFi8, 0xFFi8, 0x00, 0x00, 0x00, 0x00 };
+const extern __declspec( selectany ) _DataI vMask1 = { 0xFFi8, 0xFFi8, 0xFFi8, 0xFFi8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+
+static __forceinline _Data Load3Unsafe(const float* x)
+{
+  return _And( _Load( x ), _CastFI( vMask3 ) );
+}
+
+static __forceinline float FastExpS(float x)
 {
   /* Marginally faster than the table-driven method. */
   /* https://stackoverflow.com/questions/10552280/fast-exp-calculation-possible-to-improve-accuracy-without-losing-too-much-perfo/10792321#10792321 */
-  volatile union {
-      float f;
-      unsigned int i;
+  union {
+    float f;
+    unsigned int i;
   } cvt;
 
   /* exp(x) = 2^i * 2^f; i = floor (log2(e) * x), 0 <= f <= 1 */
@@ -269,33 +291,35 @@ static __forceinline float FastExp3S(float x)  /* cubic spline approximation */
 
 static float FastClampS(float x, float low, float high)
 {
-  return _vFirst(_mm_min_ps(_mm_max_ps(_Set(low), _Set(x)), _Set(high)));
+  return _vFirst(_Min(_Max(_SetFirstUnsafe(low), _SetFirstUnsafe(x)), _SetFirstUnsafe(high)));
 }
 
 static _Data FastClamp(_Data vX, _Data vLow, _Data vHigh)
 {
-  return _mm_min_ps(_mm_max_ps(vLow, vX), vHigh);
+  return _Min(_Max(vLow, vX), vHigh);
 }
+
+const extern __declspec( selectany ) _Data vLow = {-87.33654f, -87.33654f, -87.33654f, -87.33654f};
+const extern __declspec( selectany ) _Data vHigh = {88.72283f, 88.72283f, 88.72283f, 88.72283f};
+/* to get exp(x / 2) */
+const extern __declspec( selectany ) _Data vExpFactor = {(1 << 22) / float(M_LN2), (1 << 22) / float(M_LN2), (1 << 22) / float(M_LN2), (1 << 22) / float(M_LN2) };
+
+/* NB: zero shift! */
+/* 127 * (1 << 23) */
+const extern __declspec( selectany ) _Data vExpC = {1.f, 1.f, 1.f, 1.f};
 
 _Data __forceinline BetterFastExpSse(_Data vX)
 {
   /* https://stackoverflow.com/questions/47025373/fastest-implementation-of-the-natural-exponential-function-using-sse */
   /* Of the several at the above link, this is the only consistently reliable version. */
   /* Clamping added manually. */
-  static const _Data vLow
-    = {-87.33654f, -87.33654f, -87.33654f, -87.33654f};
-  static const _Data vHigh
-    = {88.72283f, 88.72283f, 88.72283f, 88.72283f};
-
   vX                    = FastClamp(vX, vLow, vHigh);
 
-  const _Data a         = _mm_set1_ps ((1 << 22) / float(M_LN2)); /* to get exp(x / 2) */
-  const _DataI b        = _mm_set1_epi32 (127 * (1 << 23));       /* NB: zero shift! */
-  _DataI r              = _mm_cvtps_epi32 (_mm_mul_ps (a, vX));
-  _DataI s              = _mm_add_epi32 (b, r);
-  _DataI t              = _mm_sub_epi32 (b, r);
+  _DataI r              = _ConvertIF(_Mul(vExpFactor, vX));
+  _DataI s              = _AddI(_CastIF(vExpC), r);
+  _DataI t              = _SubI(_CastIF(vExpC), r);
 
-  return _mm_div_ps (_mm_castsi128_ps (s), _mm_castsi128_ps (t));
+  return _Div(_CastFI(s), _CastFI(t));
 }
 
 static inline _DataI muly(const _DataI &a, const _DataI &b)
@@ -307,10 +331,10 @@ static inline _DataI muly(const _DataI &a, const _DataI &b)
 }
 
 static inline _Data recip_float4_single(_Data x) {
-  _Data res             = _mm_rcp_ps(x);
-  _Data muls            = _mm_mul_ps(x, _mm_mul_ps(res, res));
+  const _Data res       = _mm_rcp_ps(x);
+  const _Data muls            = _mm_mul_ps(x, _mm_mul_ps(res, res));
 
-  return res            =  _mm_sub_ps(_mm_add_ps(res, res), muls);
+  return _Sub(_Add(res, res), muls);
 }
 
 static __forceinline _Data FasterExp(_Data vX)
@@ -328,37 +352,28 @@ static  __forceinline _Data FastExpAlwaysNegative(_Data vX)
   /* https://stackoverflow.com/questions/47025373/fastest-implementation-of-the-natural-exponential-function-using-sse */
   /* Of the several at the above link, this is the only consistently reliable version. */
   /* Clamping added manually. */
-  static const _Data vLow
-    = {-87.33654f, -87.33654f, -87.33654f, -87.33654f};
+  vX                  = _Max(vX, vLow);
 
-  vX                    = _Max(vX, vLow);
+  const _DataI r      = _ConvertIF(_Mul(vExpFactor, vX));
+  const _DataI s      = _AddI(_CastIF(vExpC), r);
+  const _DataI t      = _SubI(_CastIF(vExpC), r);
 
-  const __m128 a        = _mm_set1_ps ((1 << 22) / float(M_LN2)); /* to get exp(x / 2) */
-  const __m128i b       = _mm_set1_epi32 (127 * (1 << 23));       /* NB: zero shift! */
-  __m128i r             = _mm_cvtps_epi32 (_mm_mul_ps (a, vX));
-  __m128i s             = _mm_add_epi32 (b, r);
-  __m128i t             = _mm_sub_epi32 (b, r);
-
-  return _mm_div_ps (_mm_castsi128_ps (s), _mm_castsi128_ps (t));
+  return _Div(_CastFI(s), _CastFI(t));
 }
+
 
 static  __forceinline _Data FastExpAlwaysPositive(_Data vX)
 {
   /* https://stackoverflow.com/questions/47025373/fastest-implementation-of-the-natural-exponential-function-using-sse */
   /* Of the several at the above link, this is the only consistently reliable version. */
   /* Clamping added manually. */
-  static const _Data vHigh
-    = {88.72283f, 88.72283f, 88.72283f, 88.72283f};
-
   vX                    = _Min(vX, vHigh);
 
-  const __m128 a        = _mm_set1_ps ((1 << 22) / float(M_LN2)); /* to get exp(x / 2) */
-  const __m128i b       = _mm_set1_epi32 (127 * (1 << 23));       /* NB: zero shift! */
-  __m128i r             = _mm_cvtps_epi32 (_mm_mul_ps (a, vX));
-  __m128i s             = _mm_add_epi32 (b, r);
-  __m128i t             = _mm_sub_epi32 (b, r);
+  const _DataI r             = _ConvertIF(_Mul (vExpFactor, vX));
+  const _DataI s             = _AddI(_CastIF(vExpC), r);
+  const _DataI t             = _SubI(_CastIF(vExpC), r);
 
-  return _mm_div_ps (_mm_castsi128_ps (s), _mm_castsi128_ps (t));
+  return _Div(_CastFI(s), _CastFI(t));
 }
 
 #ifdef __SSE4_1__
@@ -456,28 +471,33 @@ static __forceinline _Data FastATan2(_Data y, _Data x)
 static __forceinline float FastSqrtS(float x)
 {
   /* Bare sqrt, avoid setting global state. */
-  return _vFirst(_mm_sqrt_ss(_Set(x)));
+  return _vFirst(_mm_sqrt_ss(_SetFirstUnsafe(x)));
 }
 
 static __forceinline float FastRSqrtS(float x) {
   //taken from http://stackoverflow.com/q/14752399/556899
-  float res            = _vFirst(_mm_rsqrt_ss(_Set(x))); 
+  const float res     = _vFirst(_mm_rsqrt_ss(_SetFirstUnsafe(x))); 
 
   return (0.5f*res) * (3.f-((x*res)*res));
 }
 
 /* Remember this is a C-file (no templates) */
-static __forceinline float FastMinF(float a, float b)
+static __forceinline float FastMinS(float a, float b)
 {
   return a < b ? a : b;
 }
+
+static __forceinline float FastMaxS(float a, float b)
+{
+  return a > b ? a : b;
+}
+
+const extern __declspec( selectany ) _Data vTwoPI ={ (float) (2. * VL_PI),(float)(2. * VL_PI), (float)(2. * VL_PI), (float)(2. * VL_PI) };
 
 static __forceinline _Data Mod2PILimited(_Data x)
 {
   /* Perform a limited mod on the components of x.
    * x is in the range [-4PI, +4PI] */
-  static _Data const vTwoPI   = _Set((float)(2. * VL_PI));
-
   _Data needsReduction = _CmpGE(x, vTwoPI);
   _Data vOffset        = _And(needsReduction, vTwoPI);  /* 0.0 or 2*Pi */
   _Data const vResult  = _Sub(x, vOffset);
@@ -496,16 +516,17 @@ static __forceinline float FastAbsS(float x)
 static __forceinline _Data FastAbs(_Data vX)
 {
   /* https://stackoverflow.com/questions/5508628/how-to-absolute-2-double-or-4-floats-using-sse-instruction-set-up-to-sse4 */
-  static const _Data sign_mask = _Set(-0.f); // -0.f = 1 << 31
 
-  return _AndNot(sign_mask, vX);
+  return _AndNot(vX, _Set(-0.f));
 }
+
+const extern __declspec( selectany ) _Data vPI ={ (float) VL_PI, (float) VL_PI, (float) VL_PI, (float) VL_PI };
 
 static __forceinline _Data FastACos(_Data vX)
 {
   static const _Data vOne = {1.f, 1.f, 1.f, 1.f};
 
-  _Data vNegate = Blend(vX, vOne, _CmpLT(vX, _mm_setzero_ps()));
+  _Data vNegate = Blend(vX, vOne, _CmpLT(vX, _SetZero()));
 
   vX = FastAbs(vX);
 
@@ -515,8 +536,6 @@ static __forceinline _Data FastACos(_Data vX)
     {0.2121144f, 0.2121144f, 0.2121144f, 0.2121144f},
     {1.5707288f, 1.5707288f, 1.5707288f, 1.5707288f}
   };
-
-  static const _Data vPI = {3.14159265358979f, 3.14159265358979f, 3.14159265358979f, 3.14159265358979f};
 
   _Data vResult = vC[0];
 
@@ -541,7 +560,7 @@ static __forceinline float FastACosS(float x) {
   /* M. Abramowitz and I.A. Stegun, Ed. */
   /* Absolute error <= 6.7e-5           */
 
-  float negate = float(x < 0.f);
+  const float negate = float(x < 0.f);
   x = FastAbsS(x);
   float ret = -0.0187293f;
   ret = ret * x;
@@ -711,7 +730,7 @@ static __forceinline float FastHProduct(_Data v)
   return _vFirst(sums);
 }
 #else
-static __forceinline float FastHsum(_Data v)
+static __forceinline float FastHsumS(_Data v)
 {
                                                                          /* v = [ D C | B A ] */
   _Data shuf            = _mm_shuffle_ps(v, v, _MM_SHUFFLE(2, 3, 0, 1)); /* [ C D | B A ] */
@@ -722,7 +741,16 @@ static __forceinline float FastHsum(_Data v)
   return _vFirst(sums);
 }
 
-static __forceinline float FastHProduct(_Data v)
+static __forceinline _Data FastHsum(_Data v)
+{
+  /* v = [ D C | B A ] */
+  _Data shuf            = _mm_shuffle_ps(v, v, _MM_SHUFFLE(2, 3, 0, 1)); /* [ C D | B A ] */
+  _Data sums            = _Add(v, shuf);                                 /* sums = [ D+C C+D | B+A A+B ] */
+  shuf                  = _mm_movehl_ps(shuf, sums);                     /*  [   C   D | D+C C+D ] let the compiler avoid a mov by reusing shuf */
+  return _Splat(_mm_add_ss(sums, shuf), 0);
+}
+
+static __forceinline float FastHProductS(_Data v)
 {
   /* v = [ D C | B A ] */
   _Data shuf            = _mm_shuffle_ps(v, v, _MM_SHUFFLE(2, 3, 0, 1)); /* [ C D | B A ] */
@@ -732,6 +760,15 @@ static __forceinline float FastHProduct(_Data v)
 
   return _vFirst(products);
 }
+
+static __forceinline _Data FastHProduct(_Data v)
+{
+  /* v = [ D C | B A ] */
+  _Data shuf            = _mm_shuffle_ps(v, v, _MM_SHUFFLE(2, 3, 0, 1)); /* [ C D | B A ] */
+  _Data products        = _Mul(v, shuf);                                 /* products = [ D*C C*D | B*A A*B ] */
+  shuf                  = _mm_movehl_ps(shuf, products);                 /*  [   C   D | D*C C*D ] let the compiler avoid a mov by reusing shuf */
+  return _Splat(_mm_mul_ss(products, shuf), 0);
+}
 #endif
 
 static __forceinline float FastDot4(_Data v1, _Data v2)
@@ -740,7 +777,7 @@ static __forceinline float FastDot4(_Data v1, _Data v2)
   /* JPB WIP OPT */
   return _vFirst(_mm_dp_ps(v1, v2, 0xFF));
 #else
-  __m128 r1 = _mm_mul_ps(v1, v2);
+  const __m128 r1 = _mm_mul_ps(v1, v2);
   __m128 shuf   = _mm_shuffle_ps(r1, r1, _MM_SHUFFLE(2, 3, 0, 1));
   __m128 sums   = _mm_add_ps(r1, shuf);
   shuf          = _mm_movehl_ps(shuf, sums);
@@ -748,4 +785,24 @@ static __forceinline float FastDot4(_Data v1, _Data v2)
   return _mm_cvtss_f32(sums);
 #endif
 }
+
+static size_t NumGroupsForSize(size_t v)
+{
+  return (v + (GROUP_SIZE-1)) / GROUP_SIZE;
+}
+
+#define _MM_TRANSPOSE3_PS(row0, row1, row2, row3) {                 \
+  __m128 _Tmp3, _Tmp2, _Tmp1, _Tmp0;                          \
+  \
+  _Tmp0   = _mm_shuffle_ps((row0), (row1), 0x44);          \
+  _Tmp2   = _mm_shuffle_ps((row0), (row1), 0xEE);          \
+  _Tmp1   = _mm_shuffle_ps((row2), (row3), 0x44);          \
+  _Tmp3   = _mm_shuffle_ps((row2), (row3), 0xEE);          \
+  \
+  (row0) = _mm_shuffle_ps(_Tmp0, _Tmp1, 0x88);              \
+  (row1) = _mm_shuffle_ps(_Tmp0, _Tmp1, 0xDD);              \
+  (row2) = _mm_shuffle_ps(_Tmp2, _Tmp3, 0x88);              \
+}
+
+
 #endif /* P2PUTILS_H */

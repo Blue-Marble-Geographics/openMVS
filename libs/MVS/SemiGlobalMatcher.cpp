@@ -921,27 +921,29 @@ void SemiGlobalMatcher::Match(const ViewData& leftImage, const ViewData& rightIm
 		const ImageRef u(c+halfWindowSizeX,r+halfWindowSizeY);
 		// initialize pixel patch weights
 		WeightedPatch w;
-		w.normSq0 = 0;
-		w.sumWeights = 0;
+		WeightedPatchInfo wpi;
+		wpi.normSq0 = 0;
+		float sumWeights = 0.f;
 		int n = 0;
 		const Pixel8U& colCenter = leftImage.imageColor(u);
 		for (int i=-halfWindowSizeY; i<=halfWindowSizeY; ++i) {
 			for (int j=-halfWindowSizeX; j<=halfWindowSizeX; ++j) {
 				const ImageRef x(u.x+j,u.y+i);
-				w.normSq0 +=
+				wpi.normSq0 +=
 					(w.pixelTempWeights[n] = leftImage.imageGray(x)) *
 					(w.pixelWeights[n] = EXP(Compute::WeightColor(leftImage.imageColor, colCenter, x)+Compute::WeightSpatial(j,i)));
-				w.sumWeights += w.pixelWeights[n];
+				sumWeights += w.pixelWeights[n];
 				++n;
 			}
 		}
 		ASSERT(n == numTexels);
-		const float tm(w.normSq0/w.sumWeights);
-		w.normSq0 = 0;
+		wpi.sumWeights = sumWeights;
+		const float tm(wpi.normSq0/wpi.sumWeights);
+		wpi.normSq0 = 0;
 		n = 0;
 		do {
 			const float t(w.pixelTempWeights[n] - tm);
-			w.normSq0 += (w.pixelTempWeights[n] = w.pixelWeights[n] * t) * t;
+			wpi.normSq0 += (w.pixelTempWeights[n] = w.pixelWeights[n] * t) * t;
 		} while (++n < numTexels);
 		// compute pixel cost
 		Cost* costs = imageCosts.data()+pixel.idx;
@@ -963,8 +965,8 @@ void SemiGlobalMatcher::Match(const ViewData& leftImage, const ViewData& rightIm
 				}
 			}
 			{
-			const float normSq1(sumSq-SQUARE(sum)/w.sumWeights);
-			const float ncc(nom/SQRT(w.normSq0*normSq1+eps));
+			const float normSq1(sumSq-SQUARE(sum)/wpi.sumWeights);
+			const float ncc(nom/SQRT(wpi.normSq0*normSq1+eps));
 			*costs++ = (ncc <= 0 ? Cost(255) : (Cost)ROUND2INT((1.f-MINF(ncc,1.f))*255.f));
 			}
 			NEXT_COST:;

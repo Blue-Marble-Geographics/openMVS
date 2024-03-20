@@ -70,6 +70,10 @@ String strConfigFileName;
 boost::program_options::variables_map vm;
 } // namespace OPT
 
+#ifndef _USE_CUDA
+int unused;
+#endif
+
 // initialize and parse the command line parameters
 bool Initialize(size_t argc, LPCTSTR* argv)
 {
@@ -97,7 +101,9 @@ bool Initialize(size_t argc, LPCTSTR* argv)
 		#endif
 		#ifdef _USE_CUDA
 		("cuda-device", boost::program_options::value(&CUDA::desiredDeviceID)->default_value(-1), "CUDA device number to be used for depth-map estimation (-2 - CPU processing, -1 - best GPU, >=0 - device index)")
-		#endif
+		#else
+		( "cuda-device", boost::program_options::value(&unused)->default_value(-1), "CUDA device number to be used for depth-map estimation (-2 - CPU processing, -1 - best GPU, >=0 - device index)" )
+#		endif
 		;
 
 	// group of options allowed both on command line and in config file
@@ -374,7 +380,14 @@ int main(int argc, LPCTSTR* argv)
 		if (VERBOSITY_LEVEL > 1 && !scene.pointcloud.IsEmpty())
 			scene.pointcloud.PrintStatistics(scene.images.data(), &scene.obb);
 		#endif
+
 		TD_TIMER_START();
+#if 0 // JPB WIP BUG Revisit
+		if (OPT::nFusionMode != 0) {
+			VERBOSE("error: Negative fusion modes currently unsupported.");
+			return EXIT_FAILURE;
+		}
+#endif
 		if (!scene.DenseReconstruction(OPT::nFusionMode, OPT::bCrop2ROI, OPT::fBorderROI)) {
 			if (ABS(OPT::nFusionMode) != 1)
 				return EXIT_FAILURE;

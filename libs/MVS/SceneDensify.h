@@ -71,9 +71,9 @@ public:
 	static DepthData ScaleDepthData(const DepthData& inputDeptData, float scale);
 
 protected:
-	static void* STCALL ScoreDepthMapTmp(void*);
-	static void* STCALL EstimateDepthMapTmp(void*);
-	static void* STCALL EndDepthMapTmp(void*);
+	static void* STCALL ScoreDepthMapTmp(cList<DepthEstimator>& estimators);
+	static void* STCALL EstimateDepthMapTmp(cList<DepthEstimator>& estimators);
+	static void* STCALL EndDepthMapTmp(cList<DepthEstimator>& estimators);
 
 public:
 	Scene& scene;
