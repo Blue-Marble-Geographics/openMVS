@@ -70,6 +70,9 @@ String strConfigFileName;
 boost::program_options::variables_map vm;
 } // namespace OPT
 
+// Used for testing.
+#define FORCIBLY_DISABLE_CUDA
+
 #ifndef _USE_CUDA
 int unused;
 #endif
@@ -102,10 +105,17 @@ bool Initialize(size_t argc, LPCTSTR* argv)
 		#ifdef _USE_CUDA
 		("cuda-device", boost::program_options::value(&CUDA::desiredDeviceID)->default_value(-1), "CUDA device number to be used for depth-map estimation (-2 - CPU processing, -1 - best GPU, >=0 - device index)")
 		#else
-		( "cuda-device", boost::program_options::value(&unused)->default_value(-1), "CUDA device number to be used for depth-map estimation (-2 - CPU processing, -1 - best GPU, >=0 - device index)" )
-#		endif
+		("cuda-device", boost::program_options::value(&unused)->default_value(-2), "CUDA device number to be used for depth-map estimation (-2 - CPU processing, -1 - best GPU, >=0 - device index)" )
+		#endif
 		;
 
+#ifdef FORCIBLY_DISABLE_CUDA
+	const unsigned nNumViewsDefault(5);
+	const unsigned numIters(3);
+#ifdef _USE_CUDA
+	CUDA::desiredDeviceID = -2;
+#endif
+#else
 	// group of options allowed both on command line and in config file
 	#ifdef _USE_CUDA
 	const unsigned nNumViewsDefault(8);
@@ -114,6 +124,7 @@ bool Initialize(size_t argc, LPCTSTR* argv)
 	const unsigned nNumViewsDefault(5);
 	const unsigned numIters(3);
 	#endif
+#endif
 	unsigned nResolutionLevel;
 	unsigned nMaxResolution;
 	unsigned nMinResolution;
@@ -200,6 +211,13 @@ bool Initialize(size_t argc, LPCTSTR* argv)
 	Util::LogBuild();
 	LOG(_T("Command line: ") APPNAME _T("%s"), Util::CommandLineToString(argc, argv).c_str());
 
+#ifdef FORCIBLY_DISABLE_CUDA
+#ifdef _USE_CUDA
+	VERBOSE("Build was created with CUDA support, but CPU processing will be used regardless of command line setting.");
+#else
+	VERBOSE("Build was not created with CUDA support and CPU processing will be used.");
+#endif
+#endif
 	// validate input
 	Util::ensureValidPath(OPT::strInputFileName);
 	if (OPT::vm.count("help") || OPT::strInputFileName.empty()) {
