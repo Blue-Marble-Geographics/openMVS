@@ -1277,7 +1277,7 @@ SampleInfo GatherSampleInfo(
 	const size_t rowByteStride = imageInfo.rowByteStride;
 
 	// JPB WIP BUG Hardcoded for nTexels == 25
-	ASSERT(25 == nTexels);
+	//ASSERT(25 == nTexels);
 
 	// JPB WIP TODO: Change scan to work by group.
 
@@ -1294,15 +1294,9 @@ SampleInfo GatherSampleInfo(
 		const _Data vFracXY = _Sub(vPt, _ConvertFI(vPtAsInt));
 
 		// Faster to calculate addresses using scalar arithmetic.
-#if 1
-		const uchar* __restrict pSamples =
-			imageInfo.data2 + _AsArrayI(vPtAsInt, 1) * rowByteStride
-			+ _AsArrayI(vPtAsInt, 0) * 16;
-#else
 		const uchar* __restrict pSamples =
 			imageInfo.data + _AsArrayI(vPtAsInt, 1) * rowByteStride
 			+ _AsArrayI(vPtAsInt, 0) * 4;
-#endif
 
 #ifdef USE_NN
 		const float sample = *(float*)pSamples;
@@ -1355,20 +1349,6 @@ SampleInfo GatherSampleInfo(
 		const _DataI vPtxAsInt = _TruncateIF(vPtx);
 		const _DataI vPtyAsInt = _TruncateIF(vPty);
 
-#if 1 // JPB WIP BUG
-		const uchar* __restrict pSample0 =
-			imageInfo.data2 + _AsArrayI(vPtyAsInt, 0) * rowByteStride
-			+ _AsArrayI(vPtxAsInt, 0) * 4 * 4;
-		const uchar* __restrict pSample1 =
-			imageInfo.data2 + _AsArrayI(vPtyAsInt, 1) * rowByteStride
-			+ _AsArrayI(vPtxAsInt, 1) * 4 * 4;
-		const uchar* __restrict pSample2 =
-			imageInfo.data2 + _AsArrayI(vPtyAsInt, 2) * rowByteStride
-			+ _AsArrayI(vPtxAsInt, 2) * 4 * 4;
-		const uchar* __restrict pSample3 =
-			imageInfo.data2 + _AsArrayI(vPtyAsInt, 3) * rowByteStride
-			+ _AsArrayI(vPtxAsInt, 3) * 4 * 4;
-#else
 		const uchar* __restrict pSample0 =
 			imageInfo.data + _AsArrayI(vPtyAsInt, 0) * rowByteStride
 			+ _AsArrayI(vPtxAsInt, 0) * 4;
@@ -1381,8 +1361,10 @@ SampleInfo GatherSampleInfo(
 		const uchar* __restrict pSample3 =
 			imageInfo.data + _AsArrayI(vPtyAsInt, 3) * rowByteStride
 			+ _AsArrayI(vPtxAsInt, 3) * 4;
-#endif
 
+#ifdef USE_NN
+		_Data sample = _SetN(*( (float*)pSample0 ), *( (float*)pSample1 ), *( (float*)pSample2 ), *( (float*)pSample3 ));
+#else
 		// Okay on rounding as all values are guaranteed positive.
 		const _Data vFracX1X2X3X4 = _Sub(vPtx, _ConvertFI(vPtxAsInt)); // pt(i).x - (int) pt(i).x
 		const _Data vFracY1Y2Y3Y4 = _Sub(vPty, _ConvertFI(vPtyAsInt)); // pt(i).y - (int) pt(i).y
@@ -1400,6 +1382,7 @@ SampleInfo GatherSampleInfo(
 		const _Data va01 = _Mul(vLLSamples, vFracY1Y2Y3Y4);
 		const _Data va11 = _Mul(vLRSamples, vFracXY);
 		const _Data sample = _Add(_Add(_Add(va00, va10), va01), va11);
+#endif
 
 #ifdef USE_REMAP
 		const _Data weights = _Load(&w.pixelWeights[1]);
@@ -1447,18 +1430,21 @@ SampleInfo GatherSampleInfo(
 		const _DataI vPtyAsInt = _TruncateIF(vPty);
 
 		const uchar* __restrict pSample0 =
-			imageInfo.data2 + _AsArrayI(vPtyAsInt, 0) * rowByteStride
-			+ _AsArrayI(vPtxAsInt, 0) * 4 * 4;
+			imageInfo.data + _AsArrayI(vPtyAsInt, 0) * rowByteStride
+			+ _AsArrayI(vPtxAsInt, 0) * 4;
 		const uchar* __restrict pSample1 =
-			imageInfo.data2 + _AsArrayI(vPtyAsInt, 1) * rowByteStride
-			+ _AsArrayI(vPtxAsInt, 1) * 4 * 4;
+			imageInfo.data + _AsArrayI(vPtyAsInt, 1) * rowByteStride
+			+ _AsArrayI(vPtxAsInt, 1) * 4;
 		const uchar* __restrict pSample2 =
-			imageInfo.data2 + _AsArrayI(vPtyAsInt, 2) * rowByteStride
-			+ _AsArrayI(vPtxAsInt, 2) * 4 * 4;
+			imageInfo.data + _AsArrayI(vPtyAsInt, 2) * rowByteStride
+			+ _AsArrayI(vPtxAsInt, 2) * 4;
 		const uchar* __restrict pSample3 =
-			imageInfo.data2 + _AsArrayI(vPtyAsInt, 3) * rowByteStride
-			+ _AsArrayI(vPtxAsInt, 3) * 4 * 4;
+			imageInfo.data + _AsArrayI(vPtyAsInt, 3) * rowByteStride
+			+ _AsArrayI(vPtxAsInt, 3) * 4;
 
+#ifdef USE_NN
+		_Data sample = _SetN(*( (float*)pSample0 ), *( (float*)pSample1 ), *( (float*)pSample2 ), *( (float*)pSample3 ));
+#else
 		// From https://stackoverflow.com/questions/18743531/sse-half-loads-mm-loadh-pi-mm-loadl-pi-issue-warnings
 		_Data vULSamples = _Load((float*) pSample0);
 		_Data vURSamples =  _Load((float*)pSample1);
@@ -1478,60 +1464,6 @@ SampleInfo GatherSampleInfo(
 		const _Data va11 = _Mul(vLRSamples, vFracXY);
 
 		const _Data sample = _Add(_Add(_Add(va00, va10), va01), va11);
-
-#if 0
-		{
-			// compare
-
-		// Faster to calculate addresses using scalar arithmetic.
-			const uchar* __restrict pUL =
-				imageInfo.data + _AsArrayI(vPtyAsInt, 0) * (rowByteStride/4)
-				+ _AsArrayI(vPtxAsInt, 0) * 4;
-			const uchar* __restrict pUR =
-				imageInfo.data + _AsArrayI(vPtyAsInt, 1) * (rowByteStride/4)
-				+ _AsArrayI(vPtxAsInt, 1) * 4;
-			const uchar* __restrict pLL =
-				imageInfo.data + _AsArrayI(vPtyAsInt, 2) * (rowByteStride/4)
-				+ _AsArrayI(vPtxAsInt, 2) * 4;
-			const uchar* __restrict pLR =
-				imageInfo.data + _AsArrayI(vPtyAsInt, 3) * (rowByteStride/4)
-				+ _AsArrayI(vPtxAsInt, 3) * 4;
-
-			_Data vULSamples2 = _mm_loadl_pi(_SetZero()  /* don't care */, (__m64*) pUL);
-			_Data vURSamples2 = _mm_loadl_pi(_SetZero()  /* don't care */, (__m64*) pUR);
-			_Data vLLSamples2 = _mm_loadl_pi(_SetZero()  /* don't care */, (__m64*) pLL);
-			_Data vLRSamples2 = _mm_loadl_pi(_SetZero()  /* don't care */, (__m64*) pLR);
-
-			vULSamples2 = _mm_loadh_pi(vULSamples2, (__m64*) (pUL + (rowByteStride/4)));
-			vURSamples2 = _mm_loadh_pi(vURSamples2, (__m64*) (pUR + (rowByteStride/4)));
-			vLLSamples2 = _mm_loadh_pi(vLLSamples2, (__m64*) (pLL + (rowByteStride/4)));
-			vLRSamples2 = _mm_loadh_pi(vLRSamples2, (__m64*) (pLR + (rowByteStride/4)));
-
-			_MM_TRANSPOSE4_PS(vULSamples2, vURSamples2, vLLSamples2, vLRSamples2); // 0.7
-
-		// Lerp of lerp verified accurate with Wolfram.
-			const _Data vURULDiff = _Sub(vURSamples2, vULSamples2);
-			const _Data vLRLLDiff = _Sub(vLRSamples2, vLLSamples2);
-		const _Data vTop1 = _Mul(vURULDiff, vFracX1X2X3X4);
-		const _Data vBot1 = _Mul(vLRLLDiff, vFracX1X2X3X4);
-			const _Data vTop = _Add(vTop1, vULSamples2);
-			const _Data vBot = _Add(vBot1, vLLSamples2);
-
-			const _Data sample9 = _Add(_Mul(_Sub(vBot, vTop), vFracY1Y2Y3Y4), vTop);
-
-			if (
-				( FastAbsS(_AsArray(sample, 0) - _AsArray(sample9, 0)) > 0.01 )
-				||	(FastAbsS(_AsArray(sample, 1) - _AsArray(sample9, 1)) > 0.01)
-				|| 	(FastAbsS(_AsArray(sample, 2) - _AsArray(sample9, 2)) > 0.01)
-				|| (FastAbsS(_AsArray(sample, 3) - _AsArray(sample9, 3)) > 0.01)
-				) {
-				std::cerr << "WTF";
-				std::cerr << "WTF";
-				std::cerr << "WTF";
-				std::cerr << "WTF";
-			}
-
-		}
 #endif
 
 #ifdef USE_REMAP

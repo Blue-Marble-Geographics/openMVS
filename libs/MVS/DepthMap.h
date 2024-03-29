@@ -78,7 +78,7 @@
 #define USE_FAST_COMPARES
 #define MORE_ACCURATE_WEIGHTS
 #define USE_FAST_SIN_COS
-#undef USE_NN
+#define USE_NN
 #undef CLAMP_SCORES
 #define USE_REMAP
 
@@ -606,7 +606,7 @@ struct MVS_API DepthEstimator {
 			image(image),
 			data(image.image.data),
 			data2(image.imageBig.data),
-			rowByteStride((int) image.imageBig.row_stride()),
+			rowByteStride((int) image.image.row_stride()),
 			widthMinus2((float)(image.image.width() - 2)),
 			heightMinus2((float)(image.image.height() - 2))
 		{

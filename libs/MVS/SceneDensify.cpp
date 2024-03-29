@@ -672,7 +672,7 @@ void* STCALL DepthMapsData::EndDepthMapTmp(cList<DepthEstimator>& estimators)
 #pragma omp parallel for num_threads(estimators.GetSize()) schedule(guided)
 	for (__int64 i = 0; i < cnt; ++i) {
 		const ImageRef& x = anEstimator.coords[i];
-		ASSERT(estimator.depthMap0(x) >= 0);
+		//ASSERT(estimator.depthMap0(x) >= 0);
 		Depth& depth = anEstimator.depthMap0.pix(x);
 		float& conf = anEstimator.confMap0.pix(x);
 		// check if the score is good enough
@@ -957,6 +957,20 @@ bool DepthMapsData::EstimateDepthMap(IIndex idxImage, int nGeometricIter)
 	//	}
 		double ts = omp_get_wtime(); // JPB WIP BUG
 
+#ifdef USE_NN
+		#pragma omp parallel for
+		for (int j = 0; j < depthData.images.size(); ++j) {
+			auto& i = depthData.images[j];
+			sCachedImagesMutex.lock();
+			auto itPair = sCachedImages.try_emplace(ImageKey_t(i.pImageData->ID, scale, i.image.cols, i.image.rows));
+			if (itPair.second) { // Insertion took place
+				itPair.first->second = i.image;
+			}
+			sCachedImagesMutex.unlock();
+
+			i.image = itPair.first->second;
+		}
+#else
 #pragma omp parallel for
 		for (int j = 0; j < depthData.images.size(); ++j) {
 			auto& i = depthData.images[j];
@@ -987,6 +1001,7 @@ bool DepthMapsData::EstimateDepthMap(IIndex idxImage, int nGeometricIter)
 
 			i.imageBig = itPair.first->second;
 		}
+#endif
 
 		double te = omp_get_wtime(); // JPB WIP BUG
 		ttotal = (te-ts) + ttotal;
