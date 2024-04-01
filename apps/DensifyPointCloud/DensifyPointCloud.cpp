@@ -40,6 +40,7 @@ using namespace MVS;
 
 #define APPNAME _T("DensifyPointCloud")
 
+#define RANDOM_ITERS_MESG
 
 // S T R U C T S ///////////////////////////////////////////////////
 
@@ -218,6 +219,11 @@ bool Initialize(size_t argc, LPCTSTR* argv)
 	VERBOSE("Build was not created with CUDA support and CPU processing will be used.");
 #endif
 #endif
+
+#ifdef RANDOM_ITERS_MESG
+	VERBOSE("Build uses Random Iters = 3.");
+#endif
+
 	// validate input
 	Util::ensureValidPath(OPT::strInputFileName);
 	if (OPT::vm.count("help") || OPT::strInputFileName.empty()) {
