@@ -112,9 +112,6 @@ bool Initialize(size_t argc, LPCTSTR* argv)
 #ifdef FORCIBLY_DISABLE_CUDA
 	const unsigned nNumViewsDefault(5);
 	const unsigned numIters(3);
-#ifdef _USE_CUDA
-	CUDA::desiredDeviceID = -2;
-#endif
 #else
 	// group of options allowed both on command line and in config file
 	#ifdef _USE_CUDA
@@ -271,6 +268,12 @@ bool Initialize(size_t argc, LPCTSTR* argv)
 	// start memory dumper
 	MiniDumper::Create(APPNAME, WORKING_FOLDER);
 	#endif
+
+#ifdef FORCIBLY_DISABLE_CUDA
+#ifdef _USE_CUDA
+		CUDA::desiredDeviceID = -2;
+#endif
+#endif
 
 	Util::Init();
 	return true;
