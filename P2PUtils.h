@@ -69,6 +69,7 @@
 // This should be retested
 #define _SetFirstUnsafe _mm_set_ss
 #define _SetN(a,b,c,d) _mm_set_ps((d),(c),(b),(a))
+#define _SetNI(a,b,c,d) _mm_set_epi32((d),(c),(b),(a))
 #define _SetNDeltas(a,b) _SetN((a), ((a)+(b)), (a)+(b)*2.f, (a)+(b)*3.f)
 #define _SetNMemory(a,b) _SetN((a)[0], (a)[b], (a)[2*(b)], (a)[3*(b)])
 #define _Evens(a,b) _mm_shuffle_ps((a),(b), _MM_SHUFFLE(2, 0, 2, 0))
@@ -784,6 +785,11 @@ static __forceinline float FastDot4(_Data v1, _Data v2)
   sums          = _mm_add_ss(sums, shuf);
   return _mm_cvtss_f32(sums);
 #endif
+}
+
+static size_t NumElemsForSize(size_t v)
+{
+  return (v + (GROUP_SIZE-1));
 }
 
 static size_t NumGroupsForSize(size_t v)

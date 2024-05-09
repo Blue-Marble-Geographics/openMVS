@@ -54,7 +54,9 @@ class MVS_API Scene
 public:
 	PlatformArr platforms; // camera platforms, each containing the mounted cameras and all known poses
 	ImageArr images; // images, each referencing a platform's camera pose
-	PointCloud pointcloud; // point-cloud (sparse or dense), each containing the point position and the views seeing it
+
+	// JPB Note: Must remain a PointCloudStreaming object to enable a fast stream save.
+	PointCloudStreaming pointcloud; // point-cloud (sparse or dense), each containing the point position and the views seeing it
 	Mesh mesh; // mesh, represented as vertices and triangles, constructed from the input point-cloud
 	OBB3f obb; // optional region-of-interest; oriented bounding box containing the entire scene
 

@@ -52,6 +52,30 @@
 
 
 // D E F I N E S ///////////////////////////////////////////////////
+// 3 is noticeably better than 2, 4 not so.
+#define DPC_NUM_ITERS (3) // Was 4 in _USE_CUDA pathway, 3 not.
+#define DPC_IMAGE_CACHE
+#undef DPC_EXTENDED_OMP_THREADING // Changes threading order and drastically affects the result.
+#define DPC_EXTENDED_OMP_THREADING2
+#define DPC_NEW_FUSING
+#define DPC_FLUSH_DENORMALS
+
+// Use a faster, but less accurate, exp function in score factor calculation?
+#define DPC_FASTER_SCORE_FACTOR
+
+// Reduce the precision in Dir2Normal and Normal2Dir to improve performance?
+#define DPC_FASTER_RANDOM_ITER_CALC
+
+#define DPC_FASTER_SAMPLING
+
+// Reduce the detail calculation accuracy to improve performance?
+#define DPC_FASTER_SCORE_PIXEL_DETAIL
+#define DPC_FASTER_SCORE_PIXEL_DETAIL2
+
+// Use a parallel version of pca_estimate_normals (requires TBB)?
+#define DPC_FASTER_NORMAL_ESTIMATION
+
+// DPC_FASTER_SAMPLING related:
 
 
 // P R O T O T Y P E S /////////////////////////////////////////////

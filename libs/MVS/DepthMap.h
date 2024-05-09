@@ -76,7 +76,7 @@
 #undef USE_ORIG
 #define USE_INV_SQRT
 #define USE_FAST_COMPARES
-#define MORE_ACCURATE_WEIGHTS
+#undef MORE_ACCURATE_WEIGHTS
 #define USE_FAST_SIN_COS
 #undef USE_NN
 #undef CLAMP_SCORES
@@ -168,6 +168,7 @@ extern float fRandomSmoothBonus;
 } // namespace OPTDENSE
 /*----------------------------------------------------------------*/
 
+#ifdef DPC_FASTER_SAMPLING
 constexpr int sRemapTbl[25] =
 {
 	0,
@@ -178,18 +179,29 @@ constexpr int sRemapTbl[25] =
 	16, 17, 18, 19,
 	21, 22, 23, 24
 };
+#endif
 
 typedef TImage<ViewsID> ViewsMap;
 
 template <int nTexels>
 struct WeightedPatchFix {
-	float pixelWeights[nTexels];
-	float pixelTempWeights[nTexels];
+#ifdef DPC_FASTER_SAMPLING
+	float __declspec( align( 16 ) ) pixelWeights[nTexels-1];
+	float __declspec( align( 16 ) ) pixelTempWeights[nTexels-1];
+	float firstPixelWeight;
+	float firstPixelTempWeight;
+#else
+	float weights[nTexels];
+	float tempWeights[nTexels];
+#endif
 };
 
 // Stored separately for efficiency.
 struct WeightedPatchInfo {
 	float sumWeights;
+#ifdef DPC_FASTER_SAMPLING
+	float invSumWeights;
+#endif
 	float normSq0;
 };
 
@@ -223,7 +235,7 @@ struct Normal4
 		v = _Mul(v, data);
 
 		// 	https://stackoverflow.com/questions/6996764/fastest-way-to-do-horizontal-sse-vector-sum-or-other-reduction
-		const _Data vT = _mm_add_ps(v, _mm_movehl_ps(v, v));
+			const _Data vT = _mm_add_ps(v, _mm_movehl_ps(v, v));
 		const _Data sum = _mm_add_ss(vT, _mm_shuffle_ps(vT, vT, 1));
 
 		return _vFirst(sum);
@@ -323,6 +335,15 @@ struct MVS_API DepthData {
 		Mat44 Tr4;
 		Mat44 Tl4; //
 
+		_Data mHm0Hm1Hm2;
+		_Data mHl00Hl10Hl20;
+		_Data mHl01Hl11Hl21;
+		_Data mHl02Hl12Hl22;
+		_Data mHr00Hr00Hr00;
+		_Data mHr11Hr11Hr11;
+		_Data mHr02Hr02Hr02;
+		_Data mHr12Hr12Hr12;
+		
 		inline void Init(const Camera& cameraRef) {
 			Hl = camera.K * camera.R * cameraRef.R.t();
 			Hm = camera.K * camera.R * (cameraRef.C - camera.C);
@@ -364,6 +385,15 @@ struct MVS_API DepthData {
 			vHr11_11 = _mm_set_pd(Hr(1,1), Hr(1,1));
 			vHr02_02 = _mm_set_pd(Hr(0,2), Hr(0,2));
 			vHr12_12 = _mm_set_pd(Hr(1,2), Hr(1,2));
+
+			mHm0Hm1Hm2 = _SetN((float) Hm(0), (float)Hm(1), (float)Hm(2), 0.f);
+			mHl00Hl10Hl20 = _SetN((float)Hl(0, 0), (float)Hl(1, 0), (float)Hl(2, 0), 0.f);
+			mHl01Hl11Hl21 = _SetN((float)Hl(0, 1), (float)Hl(1, 1), (float)Hl(2, 1), 0.f);
+			mHl02Hl12Hl22 = _SetN((float)Hl(0, 2), (float)Hl(1, 2), (float)Hl(2, 2), 0.f);
+			mHr00Hr00Hr00 = _SetN((float)Hr(0, 0), (float)Hr(0, 0), (float)Hr(0, 0), 0.f);
+			mHr11Hr11Hr11 = _SetN((float)Hr(1, 1), (float)Hr(1, 1), (float)Hr(1, 1), 0.f);
+			mHr02Hr02Hr02 = _SetN((float)Hr(0, 2), (float)Hr(0, 2), (float)Hr(0, 2), 0.f);
+			mHr12Hr12Hr12 = _SetN((float)Hr(1, 2), (float)Hr(1, 2), (float)Hr(1, 2), 0.f);
 		}
 
 		inline IIndex GetID() const {
@@ -493,8 +523,10 @@ struct MVS_API DepthEstimator {
 	#endif
 
 	//int idxPixel; // 
-	// JPB WIP BUG volatile Thread::safe_t& idxPixel; // current image index to be processed
-	#if DENSE_SMOOTHNESS == DENSE_SMOOTHNESS_NA
+#ifndef DPC_EXTENDED_OMP_THREADING
+	volatile Thread::safe_t& idxPixel; // current image index to be processed
+#endif
+#if DENSE_SMOOTHNESS == DENSE_SMOOTHNESS_NA
 	CLISTDEF0IDX(NeighborData,IIndex) neighbors; // neighbor pixels coordinates to be processed
 	#else
 	// JPB WIP BUG CLISTDEF0IDX(ImageRef,IIndex) neighbors; // neighbor pixels coordinates to be processed
@@ -503,16 +535,16 @@ struct MVS_API DepthEstimator {
 	float mLowResDepth;
 	_Data vX0;
 	ImageRef x0;	  // constants during one pixel loop
-#if 1
 	Weight pWeightMap;
 	WeightedPatchInfo pWeightMap0Info;
+#ifdef DPC_FASTER_SCORE_PIXEL_DETAIL
+	_Data x0ULPatchCorner0;
+	_Data x0ULPatchCorner1;
 #else
-	Weight* pWeightMap;
-	WeightedPatchInfo* pWeightMap0Info;
-#endif
 	Vec2_t x0ULPatchCorner;
 	__m128d x0ULPatchCorner0;
 	__m128d x0ULPatchCorner1;
+#endif
 	Depth lowResDepth;
 	float normSq0;	  //
 	_Data vFactorDeltaDepth;
@@ -607,12 +639,13 @@ struct MVS_API DepthEstimator {
 			data(image.image.data),
 			data2(image.imageBig.data),
 			rowByteStride((int) image.imageBig.row_stride()),
-			widthMinus2((float)(image.image.width() - 2)),
-			heightMinus2((float)(image.image.height() - 2))
+			widthMinus2((image.image.width() - 2)),
+			heightMinus2((image.image.height() - 2))
 		{
 			if (image.image.elem_stride() != 4) {
 				throw std::runtime_error("Unsupported");
 			}
+
 			if (!image.depthMap.empty()) {
 				depthMapData = image.depthMap.data,
 				depthMapElemStride = image.depthMap.elem_stride();
@@ -628,8 +661,13 @@ struct MVS_API DepthEstimator {
 		uchar* data;
 		uchar* data2;
 		int rowByteStride;
+#if 1 // JPB WIP BUG precision testing
+		double widthMinus2;
+		double heightMinus2;
+#else
 		float widthMinus2;
 		float heightMinus2;
+#endif
 
 		// Optional
 		const uchar* depthMapData;
@@ -657,28 +695,25 @@ struct MVS_API DepthEstimator {
 
 		void Detail(
 			Depth depth,
-#if 1
-			const Matx13_t& mat,
+#ifdef DPC_FASTER_SCORE_PIXEL_DETAIL
+			const _Data mat,
 #else
-			__m128d mat01,
-			double mat2,
+			const Matx13_t& mat,
 #endif
 			const _Data& depthMapPt,
 			float lowResDepth
 		)
 		{
 			mDepth = depth;
-#if 1
-			//mMat = _SetN(mat(0), mat(1), mat(2), 0.f);
+#ifdef DPC_FASTER_SCORE_PIXEL_DETAIL
+			mMat0 = _Set(_AsArray(mat, 0));
+			mMat1 = _Set(_AsArray(mat, 1));
+			mMat2 = _Set(_AsArray(mat, 2));
+#else
 			mMat01 = _mm_set_pd(mat(1), mat(0));
 			mMat0 = _mm_set1_pd(mat(0));
 			mMat1 = _mm_set1_pd(mat(1));
 			mMat2 = _mm_set1_pd(mat(2));
-#else
-			mMat01 = mat01;
-			mMat0 = _mm_set1_pd(mat01.m128d_f64[0]);
-			mMat1 = _mm_set1_pd(mat01.m128d_f64[1]);
-			mMat2 = _mm_set1_pd(mat2);
 #endif
 			mDepthMapPt = depthMapPt;
 			mLowResDepth = lowResDepth;
@@ -693,25 +728,50 @@ struct MVS_API DepthEstimator {
 
 		Depth mDepth;
 		Depth mLowResDepth;
+#ifdef DPC_FASTER_SCORE_PIXEL_DETAIL
+		_Data mMat0;
+		_Data mMat1;
+		_Data mMat2;
+#else
 		__m128d mMat01;
 		__m128d mMat0;
 		__m128d mMat1;
 		__m128d mMat2;
+#endif
 		_Data mVScoreFactor;
 		_Data mvDeltaDepth;
 		_Data mDepthMapPt; // w component undefined.
 		mutable bool mLowResDepthMapEmpty;
 
 		// Always set before scoring.
+		const uchar* mAddr;
+		_Data mFirst;
 		_Data mVX;
+#if 1 // JPB WIP BUG Precision
 		_Data mVBasisH;
-		_Data mVBasisHX4;
+			_Data mVBasisHX4;
 		_Data mVBasisHY4;
-		_Data mVBasisHZ4;
-		_Data mVBasisV;
-		_Data mVBasisVX4;
+		_Data mVBasisHZ4;	
+			_Data mVBasisV;	
+				_Data mVBasisVX4;
 		_Data mVBasisVY4;
-		_Data mVBasisVZ4;
+		_Data mVBasisVZ4;	
+#endif
+		_Data mVTopRowX4;
+		_Data mVTopRowY4;
+		_Data mVTopRowZ4;
+		_Data mvBasisVX;
+		_Data mvBasisVY;
+		_Data mvBasisVZ;
+		_Data mvBasisVX4;
+		_Data mvBasisVY4;
+		_Data mvBasisVZ4;
+		_Data mVLeftColX4;
+		_Data mVLeftColY4;
+		_Data mVLeftColZ4;
+		_Data mVBotRowX4;
+		_Data mVBotRowY4;
+		_Data mVBotRowZ4;
 
 		std::vector<ImageInfo_t, boost::alignment::aligned_allocator<ImageInfo_t, ALIGN_SIZE>> imageInfo;
 	};
@@ -720,10 +780,10 @@ struct MVS_API DepthEstimator {
 	DepthEstimator(
 		unsigned nIter,
 		DepthData& _depthData0,
-		// JPB WIP BUG volatile Thread::safe_t& _idx,
-		#if DENSE_NCC == DENSE_NCC_WEIGHTED
-		WeightMap* _weightMap0,
-		WeightMapInfo_t* _weightMap0Info,
+#ifndef DPC_EXTENDED_OMP_THREADING
+		volatile Thread::safe_t& _idx,
+#endif
+#if DENSE_NCC == DENSE_NCC_WEIGHTED
 		#else
 		const Image64F& _image0Sum,
 		#endif
@@ -739,9 +799,14 @@ struct MVS_API DepthEstimator {
 		const bool verticalInWindow = ( (unsigned)( uly ) ) < ( (unsigned)image0.image.height()-2*nSizeHalfWindow );
 
 		x0 = x;
+#ifdef DPC_FASTER_SCORE_PIXEL_DETAIL
+		x0ULPatchCorner0 = _Set((float) ulx);
+		x0ULPatchCorner1 = _Set((float) uly);
+#else
 		x0ULPatchCorner = Vec2_t((Calc_t)( ulx ), (Calc_t)( uly ));
 		x0ULPatchCorner0 = _mm_set1_pd(x0ULPatchCorner[0]);
 		x0ULPatchCorner1 = _mm_set1_pd(x0ULPatchCorner[1]);
+#endif
 
 		return horizontalInWindow && verticalInWindow;
 	}
@@ -750,9 +815,40 @@ struct MVS_API DepthEstimator {
 	template<bool HasLowResDepthMap>
 	bool FillPixelPatch()
 	{
+#ifndef DPC_FASTER_SAMPLING
+		Weight& w = pWeightMap;
+		auto& wpi = pWeightMap0Info;
+
+		wpi.sumWeights = 0;
+		wpi.normSq0 = 0;
+		int n = 0;
+		const float colCenter = image0.image(x0);
+		for (int i=-nSizeHalfWindow; i<=nSizeHalfWindow; i+=nSizeStep) {
+			for (int j=-nSizeHalfWindow; j<=nSizeHalfWindow; j+=nSizeStep) {
+				wpi.normSq0 +=
+					(w.tempWeights[n] = image0.image(x0.y+i, x0.x+j)) *
+					(w.weights[n] = GetWeight(ImageRef(j, i), colCenter));
+				wpi.sumWeights += w.weights[n];
+				++n;
+			}
+		}
+		ASSERT(n == nTexels);
+		const float tm(wpi.normSq0/wpi.sumWeights);
+		wpi.normSq0 = 0;
+		n = 0;
+		do {
+			const float t(w.tempWeights[n] - tm);
+			wpi.normSq0 += (w.tempWeights[n] = w.weights[n] * t) * t;
+		} while (++n < nTexels);
+	normSq0 = wpi.normSq0;
+#else
+		extern float firstSpatial;
 		extern ImageRef __declspec( align( 16 ) ) sRemapImageRef[];
+		extern int __declspec( align( 16 ) ) sImageOffsets[];
 		extern float __declspec( align( 16 ) ) swSpatials[];
-		_Data exp_ps(_Data);
+#if defined(MORE_ACCURATE_WEIGHTS) || defined(DPC_FASTER_SCORE_PIXEL_DETAIL2)
+		extern _Data exp_ps(_Data);
+#endif
 
 #if DENSE_NCC != DENSE_NCC_WEIGHTED
 		STATIC_ASSERT(0); // Unsupported
@@ -764,92 +860,157 @@ struct MVS_API DepthEstimator {
 				normSq0 += SQUARE(*pTexel0++ = image0.image(x0.y+i, x0.x+j)-mean);
 #else
 		// JPB WIP BUG Compare needed?
-#if 1
 		Weight& w = pWeightMap;
 		WeightedPatchInfo& wpi = pWeightMap0Info;
-#else
-		Weight& w = *pWeightMap;
-		WeightedPatchInfo& wpi = *pWeightMap0Info;
-#endif
 		if (1) { //wpi.normSq0 == 0) {
 			ASSERT(nTexels <= 32); // JPB WIP
-			float __declspec( align( 16 ) ) wColors[32];
-			float __declspec( align( 16 ) ) pixelTempWeights[32];
+			float firstColor;
+			float firstPixelTempWeight;
 
 			wpi.normSq0 = 0;
 			float sumWeights = 0.f;
-			_Data vSumWeights4 = _SetZero();
-			_Data vNormSqSum4 = _SetZero();
+			_Data vSumWeights41 = _SetZero();
+			_Data vSumWeights42 = _SetZero();
+			_Data vNormSqSum41 = _SetZero();
+			_Data vNormSqSum42 = _SetZero();
 
-			for (auto i = 0; i < nTexels; ++i) {
-#ifdef USE_REMAP
-				const ImageRef& x = sRemapImageRef[sRemapTbl[i]];
-#else
-				const ImageRef& x = sRemapImageRef[i];
-#endif
-				// color weight [0..1]
-				pixelTempWeights[i] = wColors[i] = image0.image(x0 + x);
-			}
+			firstPixelTempWeight = firstColor = image0.image(x0 + sRemapImageRef[0]);
 
 			constexpr float sigmaColor(-1.f/( 2.f*SQUARE(0.1f) ));
 			constexpr _Data vSigmaColor ={ sigmaColor, sigmaColor, sigmaColor, sigmaColor };
 			const _Data vColCenter = _Set(image0.image.pix(x0));
 
+			// Manually unfold by 4 to break dependency chains.
 			int i = 0;
-			int numGroups = nTexels / GROUP_SIZE;
-			int remaining = nTexels&( GROUP_SIZE-1 );
+			int numGroups = (nTexels-1) / (GROUP_SIZE*2);
+			int baseImageIndex = x0.y * ((int)image0.image.step.p[0]/sizeof(float) /* stride */) + x0.x;
 			while (numGroups--) {
-				_Data vPixelTempWeights = _LoadA(&pixelTempWeights[i]);
-				_Data vColor = _LoadA(&wColors[i]);
-				vColor = _Sub(vColor, vColCenter);
-				vColor = _Mul(vColor, vColor);
-				vColor = _Mul(vColor, vSigmaColor);
-#ifdef MORE_ACCURATE_WEIGHTS
-				_Data vPixelWeights = exp_ps(_Add(vColor, _LoadA(&swSpatials[i])));
-#else
-				_Data vPixelWeights = FastExp(_Add(vColor, _Load(&swSpatials[i])));
-#endif
-				_Data vNormSq0 = _Mul(vPixelWeights, vPixelTempWeights);
+				const int i0 = baseImageIndex + sImageOffsets[i];
+				const int i1 = baseImageIndex + sImageOffsets[i+1];
+				const int i2 = baseImageIndex + sImageOffsets[i+2];
+				const int i3 = baseImageIndex + sImageOffsets[i+3];
+				const int i4 = baseImageIndex + sImageOffsets[i+4];
+				const int i5 = baseImageIndex + sImageOffsets[i+5];
+				const int i6 = baseImageIndex + sImageOffsets[i+6];
+				const int i7 = baseImageIndex + sImageOffsets[i+7];
+				
+				// color weight [0..1]
+				const float pix0 = image0.image.pix(i0);
+				const float pix1 = image0.image.pix(i1);
+				const float pix2 = image0.image.pix(i2);
+				const float pix3 = image0.image.pix(i3);
+				const float pix4 = image0.image.pix(i4);
+				const float pix5 = image0.image.pix(i5);
+				const float pix6 = image0.image.pix(i6);
+				const float pix7 = image0.image.pix(i7);
+				
+				_Data vPixelTempWeights1 = _SetN(pix0, pix1, pix2, pix3);
+				_Data vPixelTempWeights2 = _SetN(pix4, pix5, pix6, pix7);
+				_Data vColor1 = vPixelTempWeights1;
+				_Data vColor2 = vPixelTempWeights2;
 
-				_Store(&w.pixelWeights[i], vPixelWeights);
-				vSumWeights4 = _Add(vSumWeights4, vPixelWeights);
-				vNormSqSum4 = _Add(vNormSqSum4, vNormSq0);
-				_Store(&w.pixelTempWeights[i], vPixelTempWeights);
-				i += GROUP_SIZE;
+				vColor1 = _Sub(vColor1, vColCenter);
+				vColor2 = _Sub(vColor2, vColCenter);
+				vColor1 = _Mul(vColor1, vColor1);
+				vColor2 = _Mul(vColor2, vColor2);
+				vColor1 = _Mul(vColor1, vSigmaColor);
+				vColor2 = _Mul(vColor2, vSigmaColor);
+#ifdef MORE_ACCURATE_WEIGHTS
+				// exp(X+Y) = exp(X)*exp(Y) exp(vColor1)*exp(swSpatials[i])
+				// = exp(vColor1)*C
+				_Data vPixelWeights1 = exp_ps(_Add(vColor1, _LoadA(&swSpatials[i])));
+				_Data vPixelWeights2 = exp_ps(_Add(vColor2, _LoadA(&swSpatials[i+GROUP_SIZE])));
+#else
+				_Data vPixelWeights1 = FastExp(_Add(vColor1, _LoadA(&swSpatials[i])));
+				_Data vPixelWeights2 = FastExp(_Add(vColor2, _LoadA(&swSpatials[i+GROUP_SIZE])));
+#endif
+				_Data vNormSq01 = _Mul(vPixelWeights1, vPixelTempWeights1);
+				_Data vNormSq02 = _Mul(vPixelWeights2, vPixelTempWeights2);
+
+				_StoreA(&w.pixelWeights[i], vPixelWeights1);
+				_StoreA(&w.pixelWeights[i+GROUP_SIZE], vPixelWeights2);
+				vSumWeights41 = _Add(vSumWeights41, vPixelWeights1);
+				vSumWeights42 = _Add(vSumWeights42, vPixelWeights2);
+				vNormSqSum41 = _Add(vNormSqSum41, vNormSq01);
+				vNormSqSum42 = _Add(vNormSqSum42, vNormSq02);
+				_StoreA(&w.pixelTempWeights[i], vPixelTempWeights1);
+				_StoreA(&w.pixelTempWeights[i+GROUP_SIZE], vPixelTempWeights2);
+				i += GROUP_SIZE*2;
 			}
 
-			while (remaining-- > 0) {
-				auto pixelTempWeight = pixelTempWeights[i];
-				float color = wColors[i] - _vFirst(vColCenter);
-				auto tmp = color*color*sigmaColor+swSpatials[i];
-#ifdef MORE_ACCURATE_WEIGHTS
-				auto pixelWeight = _vFirst(exp_ps(_Set(tmp)));
-#else
-				auto pixelWeight = _vFirst(BetterFastExpSse(_Set(tmp)));
-#endif
-				auto normSq0 = pixelWeight * pixelTempWeight;
-				w.pixelWeights[i] = pixelWeight;
-				sumWeights += pixelWeight;
-				wpi.normSq0 += normSq0;
-				w.pixelTempWeights[i] = pixelTempWeight;
-				++i;
-			}
+			vSumWeights41 = _Add(vSumWeights41, vSumWeights42);
+			vNormSqSum41 = _Add(vNormSqSum41, vNormSqSum42);
 
-			wpi.normSq0 += FastHsumS(vNormSqSum4);
-			sumWeights += FastHsumS(vSumWeights4);
+			// The first is left over.
+			auto pixelTempWeight = firstPixelTempWeight;
+			float color = firstColor - _vFirst(vColCenter);
+			auto tmp = color*color*sigmaColor+firstSpatial;
+#ifdef MORE_ACCURATE_WEIGHTS
+			auto pixelWeight = _vFirst(exp_ps(_Set(tmp)));
+#else
+			auto pixelWeight = _vFirst(BetterFastExpSse(_Set(tmp)));
+#endif
+			auto normSq0 = pixelWeight * pixelTempWeight;
+			w.firstPixelWeight = pixelWeight;
+			sumWeights += pixelWeight;
+			wpi.normSq0 += normSq0;
+			w.firstPixelTempWeight = pixelTempWeight;
+
+			wpi.normSq0 += FastHsumS(vNormSqSum41);
+			sumWeights += FastHsumS(vSumWeights41);
 
 			const float tm(wpi.normSq0/sumWeights);
 			wpi.normSq0 = 0;
-			for (int i = 0; i < nTexels; ++i) {
-				const float t(w.pixelTempWeights[i] - tm);
-				wpi.normSq0 += ( w.pixelTempWeights[i] = w.pixelWeights[i] * t ) * t;
+
+			i = 0;
+			numGroups = (nTexels-1) / (GROUP_SIZE*2);
+			const _Data vTm = _Set(tm);
+			_Data vNormSq0 = _SetZero();
+			_Data vNormSq01 = _SetZero();
+			while (numGroups--) {
+				const _Data ptw1 = _LoadA(&w.pixelTempWeights[i]);
+				const _Data ptw2 = _LoadA(&w.pixelTempWeights[i+GROUP_SIZE]);
+
+				const _Data pw1 = _LoadA(&w.pixelWeights[i]);
+				const _Data pw2 = _LoadA(&w.pixelWeights[i+GROUP_SIZE]);
+
+				const _Data vT1 = _Sub(ptw1, vTm);
+				const _Data vT2 = _Sub(ptw2, vTm);
+
+				const _Data vPtw1 = _Mul(pw1, vT1);
+				const _Data vPtw2 = _Mul(pw2, vT2);
+
+				const _Data vPtw1Sq = _Mul(vPtw1, vT1);
+				const _Data vPtw2Sq = _Mul(vPtw2, vT2);
+
+				_StoreA(&w.pixelTempWeights[i], vPtw1);
+				_StoreA(&w.pixelTempWeights[i+GROUP_SIZE], vPtw2);
+
+				vNormSq0 = _Add(vNormSq0, vPtw1Sq);
+				vNormSq01 = _Add(vNormSq01, vPtw2Sq);
+
+				//const _Data vT = _Sub(_Load(&w.pixelTempWeights[i]), vTm);
+				//const _Data vPtw = _Mul(_Load(&w.pixelWeights[i]), vT);
+				//_StoreA(&w.pixelTempWeights[i], vPtw);
+				//vNormSq0 = _Add(vNormSq0, _Mul(vPtw, vT));
+				i += GROUP_SIZE*2;
 			}
 
+			vNormSq0 = _Add(vNormSq0, vNormSq01);
+
+			const float t(w.firstPixelTempWeight - tm);
+			wpi.normSq0 += ( w.firstPixelTempWeight = w.firstPixelWeight * t ) * t;
+		
+			wpi.normSq0 += FastHsumS(vNormSq0);
+
 			wpi.sumWeights = sumWeights;
+			wpi.invSumWeights = 1.f / sumWeights;
 		}
 #endif
 
 		normSq0 = wpi.normSq0;
+#endif // DPC_FASTER_SAMPLING
+
 		// JPB Notice this differs from the one normally used "smoothSigmaDepth".
 		constexpr float smoothSigmaDepthForDepthCalc(-1.f / ( 1.f * 0.02f )); // 0.12: patch texture variance below 0.02 (0.12^2) is considered texture-less
 
@@ -868,8 +1029,13 @@ struct MVS_API DepthEstimator {
 			if (mLowResDepth > 0.f) {
 				constexpr _Data vOne = { 1.f, 1.f, 1.f, 1.f };
 				// vFactorDeltaDepth appears very sensitive to error.  Use the highest precision exp.
+#ifdef DPC_FASTER_SCORE_PIXEL_DETAIL2
 				const float tmp = normSq0 * smoothSigmaDepthForDepthCalc;
 				vFactorDeltaDepth = exp_ps(_Set(tmp));
+#else
+				const float tmp = DENSE_EXP(normSq0 * smoothSigmaDepthForDepthCalc);
+				vFactorDeltaDepth = _Set(tmp);
+#endif
 				vOneMinusFactorDeltaDepth = _Sub(vOne, vFactorDeltaDepth);
 			}
 		}	else {
@@ -881,6 +1047,7 @@ struct MVS_API DepthEstimator {
 
 	bool IsScorable(const DepthData::ViewData& image1);
 	bool IsScorable2(const ImageInfo_t& image1);
+	bool IsScorable3(const ImageInfo_t& image1);
 
 	float ScorePixelImageOrig(ScoreResultsSOA_t& scoreResults,
 		const DepthData::ViewData& image1, Depth depth, const Normal& normal);
@@ -975,10 +1142,10 @@ struct MVS_API DepthEstimator {
 
 // Tools
 bool TriangulatePoints2DepthMap(
-	const DepthData::ViewData& image, const PointCloud& pointcloud, const IndexArr& points,
+	const DepthData::ViewData& image, const PointCloudStreaming& pointcloud, const IndexArr& points,
 	DepthMap& depthMap, NormalMap& normalMap, Depth& dMin, Depth& dMax, bool bAddCorners, bool bSparseOnly=false);
 bool TriangulatePoints2DepthMap(
-	const DepthData::ViewData& image, const PointCloud& pointcloud, const IndexArr& points,
+	const DepthData::ViewData& image, const PointCloudStreaming& pointcloud, const IndexArr& points,
 	DepthMap& depthMap, Depth& dMin, Depth& dMax, bool bAddCorners, bool bSparseOnly=false);
 
 // Robustly estimate the plane that fits best the given points
@@ -994,8 +1161,8 @@ MATH_API unsigned EstimatePlaneTh(const Point3fArr&, Planef&, double maxThreshol
 MATH_API unsigned EstimatePlaneThLockFirstPoint(const Point3fArr&, Planef&, double maxThreshold, bool arrInliers[]=NULL, size_t maxIters=0);
 MATH_API int OptimizePlane(Planef& plane, const Eigen::Vector3f* points, size_t size, int maxIters, float threshold);
 
-MVS_API void EstimatePointColors(const ImageArr& images, PointCloud& pointcloud);
-MVS_API void EstimatePointNormals(const ImageArr& images, PointCloud& pointcloud, int numNeighbors=16/*K-nearest neighbors*/);
+MVS_API void EstimatePointColors(const ImageArr& images, PointCloudStreaming& pointcloud);
+MVS_API void EstimatePointNormals(const ImageArr& images, PointCloudStreaming& pointcloud, int numNeighbors=16/*K-nearest neighbors*/);
 
 MVS_API bool EstimateNormalMap(const Matrix3x3f& K, const DepthMap&, NormalMap&);
 

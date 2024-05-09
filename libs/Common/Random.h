@@ -14,7 +14,7 @@
 
 
 // D E F I N E S ///////////////////////////////////////////////////
-
+#define OPENMVS_FASTER_RANDOM
 
 namespace SEACAVE {
 
@@ -99,22 +99,20 @@ FORCEINLINE long double randomGaussianld() {
 
 // Encapsulates state for random number generation
 // based on C++11 random number generator functionality
+#ifdef OPENMVS_FASTER_RANDOM
 struct Random {
-	using result_type = uint64_t;
+	using result_type = uint32_t;
 	static result_type default_seed() { return std::mt19937::default_seed; }
-
-	static result_type max() { return std::numeric_limits<result_type>::max(); }
-
+	constexpr result_type max() { return std::numeric_limits<result_type>::max(); }
 	uint64_t state;
-
 	result_type operator()()
 	{
-		uint64_t high64;
-		state = _umul128(state, 0xda942042e4dd58b5I64, &high64);
+		uint64_t x = state;
+		unsigned count = (unsigned)(x >> 61);	// 61 = 64 - 3
+		state = x * 6364136223846793005u;
 
-		return high64;
+		return (uint32_t)(x >> (22 + count));	// 22 = 32 - 3 - 7
 	}
-
 	Random()
 	{
 		state = rand();
@@ -124,6 +122,13 @@ struct Random {
 	{
 		state = seed;
 	}
+#else
+struct Random : std::mt19937 {
+	typedef std::mt19937 generator_type;
+
+	Random() : generator_type(std::random_device()()) {}
+	Random(result_type seed) : generator_type(seed) {}
+#endif
 
 	// integer randomRange assumes this is capped
 	//STATIC_ASSERT(max() < 4294967296);
@@ -131,7 +136,11 @@ struct Random {
 	// returns a uniform random number in the range [0, 1]
 	template<typename T=result_type>
 	FORCEINLINE typename std::enable_if<std::is_floating_point<T>::value, T>::type random() {
+#ifdef OPENMVS_FASTER_RANDOM
+		return (T)random()*(1.f/(T)max());
+#else
 		return (T)random()/(T)max();
+#endif
 	}
 	// returns a uniform random number in the range [0, max()]
 	template<typename T=result_type>

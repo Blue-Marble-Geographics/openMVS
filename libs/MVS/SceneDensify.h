@@ -65,15 +65,25 @@ public:
 	bool GapInterpolation(DepthData& depthData);
 
 	bool FilterDepthMap(DepthData& depthData, const IIndexArr& idxNeighbors, bool bAdjust=true);
-	void MergeDepthMaps(PointCloud& pointcloud, bool bEstimateColor, bool bEstimateNormal);
-	void FuseDepthMaps(PointCloud& pointcloud, bool bEstimateColor, bool bEstimateNormal);
+	void MergeDepthMaps(PointCloudStreaming& pointcloud, bool bEstimateColor, bool bEstimateNormal);
+	void FuseDepthMaps(PointCloudStreaming& pointcloud, bool bEstimateColor, bool bEstimateNormal);
 
 	static DepthData ScaleDepthData(const DepthData& inputDeptData, float scale);
 
 protected:
+#ifdef DPC_EXTENDED_OMP_THREADING
 	static void* STCALL ScoreDepthMapTmp(cList<DepthEstimator>& estimators);
 	static void* STCALL EstimateDepthMapTmp(cList<DepthEstimator>& estimators);
 	static void* STCALL EndDepthMapTmp(cList<DepthEstimator>& estimators);
+#else
+	static void* STCALL ScoreDepthMapTmp(void*);
+	static void* STCALL EstimateDepthMapTmp(void*);
+#ifdef DPC_EXTENDED_OMP_THREADING2
+	static void* STCALL EndDepthMapTmp(cList<DepthEstimator>& estimators);
+#else
+	static void* STCALL EndDepthMapTmp(void*);
+#endif
+#endif
 
 public:
 	Scene& scene;

@@ -529,6 +529,9 @@ CLISTDEF0IDX(SemiGlobalMatcher::AccumCost,int) SemiGlobalMatcher::GenerateP2s(Ac
 //    can be 0 to force the standard SGM algorithm
 void SemiGlobalMatcher::Match(const Scene& scene, IIndex idxImage, IIndex numNeighbors, unsigned minResolution)
 {
+#if 1 // JPB WIP BUG Must be restored
+	throw std::runtime_error("Unsupported"); 
+#else
 	const Image& leftImage = scene.images[idxImage];
 	const float fMinScore(MAXF(leftImage.neighbors.front().score*OPTDENSE::fViewMinScoreRatio, OPTDENSE::fViewMinScore));
 	FOREACH(idxNeighbor, leftImage.neighbors) {
@@ -734,6 +737,7 @@ void SemiGlobalMatcher::Match(const Scene& scene, IIndex idxImage, IIndex numNei
 		ExportDepthDataRaw(pairName+".dmap", leftImage.name, IIndexArr{leftImage.ID,rightImage.ID}, leftImage.GetSize(), leftImage.camera.K, leftImage.camera.R, leftImage.camera.C, 0, FLT_MAX, depthMap, NormalMap(), confMap);
 		#endif
 	}
+#endif
 }
 
 void SemiGlobalMatcher::Fuse(const Scene& scene, IIndex idxImage, IIndex numNeighbors, unsigned minViews, DepthMap& depthMap, ConfidenceMap& confMap)
@@ -925,6 +929,7 @@ void SemiGlobalMatcher::Match(const ViewData& leftImage, const ViewData& rightIm
 		wpi.normSq0 = 0;
 		float sumWeights = 0.f;
 		int n = 0;
+#if 0 // JPB WIP BUG Precision
 		const Pixel8U& colCenter = leftImage.imageColor(u);
 		for (int i=-halfWindowSizeY; i<=halfWindowSizeY; ++i) {
 			for (int j=-halfWindowSizeX; j<=halfWindowSizeX; ++j) {
@@ -971,6 +976,8 @@ void SemiGlobalMatcher::Match(const ViewData& leftImage, const ViewData& rightIm
 			}
 			NEXT_COST:;
 		}
+#endif
+
 		#endif
 	};
 	ASSERT(threads.IsEmpty());

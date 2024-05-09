@@ -165,6 +165,8 @@ namespace cv { namespace gpu = cuda; }
 
 // D E F I N E S ///////////////////////////////////////////////////
 
+#define _FAST_FLOAT2INT // JPB Wrong in configuration?
+
 // In order to create a singleton class
 // add this define in your class;
 #define DECLARE_SINGLETON(SClass) \
@@ -2211,6 +2213,11 @@ public:
 	__forceinline const TYPE& pix(const ImageRef& pt) const
 	{
 		return ((const TYPE*)(data + step.p[0] * pt.y))[pt.x];
+	}
+
+	__forceinline const TYPE& pix(int index) const
+	{
+		return ((const TYPE*)(data))[index];
 	}
 
 	#ifdef _USE_BOOST

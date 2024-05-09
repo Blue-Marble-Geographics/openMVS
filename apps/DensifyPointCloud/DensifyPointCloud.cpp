@@ -111,7 +111,7 @@ bool Initialize(size_t argc, LPCTSTR* argv)
 
 #ifdef FORCIBLY_DISABLE_CUDA
 	const unsigned nNumViewsDefault(5);
-	const unsigned numIters(3);
+	const unsigned numIters(DPC_NUM_ITERS);
 #else
 	// group of options allowed both on command line and in config file
 	#ifdef _USE_CUDA
@@ -306,6 +306,9 @@ int main(int argc, LPCTSTR* argv)
 
 	Scene scene(OPT::nMaxThreads);
 	if (OPT::fSampleMesh != 0) {
+#if 1 // JPB WIP BUG
+		throw std::runtime_error("Unsupported");
+#else
 		// sample input mesh and export the obtained point-cloud
 		if (!scene.Load(MAKE_PATH_SAFE(OPT::strInputFileName), true) || scene.mesh.IsEmpty())
 			return EXIT_FAILURE;
@@ -319,6 +322,7 @@ int main(int argc, LPCTSTR* argv)
 		pointcloud.Save(MAKE_PATH_SAFE(Util::getFileFullName(OPT::strOutputFileName))+_T(".ply"));
 		Finalize();
 		return EXIT_SUCCESS;
+#endif
 	}
 	// load and estimate a dense point-cloud
 	if (!scene.Load(MAKE_PATH_SAFE(OPT::strInputFileName)))
@@ -364,14 +368,21 @@ int main(int argc, LPCTSTR* argv)
 		return EXIT_SUCCESS;
 	}
 	if (OPT::fMaxSubsceneArea > 0) {
+#if 1 // JPB WIP BUG
+		throw std::runtime_error("Unsupported");
+#else
 		// split the scene in sub-scenes by maximum sampling area
 		Scene::ImagesChunkArr chunks;
 		scene.Split(chunks, OPT::fMaxSubsceneArea);
 		scene.ExportChunks(chunks, GET_PATH_FULL(OPT::strOutputFileName), (ARCHIVE_TYPE)OPT::nArchiveType);
 		Finalize();
 		return EXIT_SUCCESS;
+#endif
 	}
 	if (OPT::thFilterPointCloud < 0) {
+#if 1 // JPB WIP BUG
+		throw std::runtime_error("Unsupported");
+#else
 		// filter point-cloud based on camera-point visibility intersections
 		scene.PointCloudFilter(OPT::thFilterPointCloud);
 		const String baseFileName(MAKE_PATH_SAFE(Util::getFileFullName(OPT::strOutputFileName))+_T("_filtered"));
@@ -379,8 +390,12 @@ int main(int argc, LPCTSTR* argv)
 		scene.pointcloud.Save(baseFileName+_T(".ply"));
 		Finalize();
 		return EXIT_SUCCESS;
+#endif
 	}
 	if (OPT::nExportNumViews && scene.pointcloud.IsValid()) {
+#if 1 // JPB WIP BUG
+		throw std::runtime_error("Unsupported");
+#else
 		// export point-cloud containing only points with N+ views
 		const String baseFileName(MAKE_PATH_SAFE(Util::getFileFullName(OPT::strOutputFileName))+
 			String::FormatString(_T("_%dviews"), ABS(OPT::nExportNumViews)));
@@ -395,12 +410,15 @@ int main(int argc, LPCTSTR* argv)
 		}
 		Finalize();
 		return EXIT_SUCCESS;
+#endif
 	}
 	if ((ARCHIVE_TYPE)OPT::nArchiveType != ARCHIVE_MVS) {
+#if 0 // JPB WIP BUG Unsupported
 		#if TD_VERBOSE != TD_VERBOSE_OFF
 		if (VERBOSITY_LEVEL > 1 && !scene.pointcloud.IsEmpty())
 			scene.pointcloud.PrintStatistics(scene.images.data(), &scene.obb);
 		#endif
+#endif
 
 		TD_TIMER_START();
 #if 0 // JPB WIP BUG Revisit

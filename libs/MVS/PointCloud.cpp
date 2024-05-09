@@ -38,6 +38,7 @@ using namespace MVS;
 
 // D E F I N E S ///////////////////////////////////////////////////
 
+//#pragma optimize("", off) // JPB WIP BUG
 
 // S T R U C T S ///////////////////////////////////////////////////
 
@@ -194,16 +195,19 @@ Planef PointCloud::EstimateGroundPlane(const ImageArr& images, float planeThresh
 
 	// export points on the found plane if requested
 	if (!fileExportPlane.empty()) {
-		PointCloud pc;
+		PointCloudStreaming pc;
+		pc.ReserveColors(1+pPoints->size());
+		pc.ReservePoints(1+pPoints->size());
+
 		const Point orig(Point(plane.m_vN)*-plane.m_fD);
-		pc.colors.emplace_back(Color::RED);
-		pc.points.emplace_back(orig);
+		pc.AddColor(Color::RED);
+		pc.AddPoint(orig);
 		for (const Point& X: *pPoints) {
 			const float dist(plane.DistanceAbs(X));
 			if (dist < threshold) {
-				pc.points.emplace_back(X);
+				pc.AddPoint(X);
 				const uint8_t color((uint8_t)(255.f*(1.f-dist/threshold)));
-				pc.colors.emplace_back(color, color, color);
+				pc.AddColorGray(color);
 			}
 		}
 		pc.Save(fileExportPlane);
@@ -241,6 +245,7 @@ namespace BasicPLY {
 	};
 } // namespace BasicPLY
 
+#if 0
 // load the dense point cloud from a PLY file
 bool PointCloud::Load(const String& fileName)
 {
@@ -409,7 +414,7 @@ bool PointCloud::SaveNViews(const String& fileName, uint32_t minViews, bool bLeg
 } // SaveNViews
 /*----------------------------------------------------------------*/
 
-
+#endif
 // print various statistics about the point cloud
 void PointCloud::PrintStatistics(const Image* pImages, const OBB3f* pObb) const
 {
@@ -563,4 +568,385 @@ void PointCloud::PrintStatistics(const Image* pImages, const OBB3f* pObb) const
 		strColors.c_str()
 	);
 } // PrintStatistics
+/*----------------------------------------------------------------*/
+
+// Create a streaming cloud from a point cloud.
+PointCloudStreaming::PointCloudStreaming(const PointCloud& src)
+{
+	Release();
+
+	// Convert a PointCloud to a PointCloudStreaming rep.
+
+	// Copy points
+	const size_t numPoints = src.GetSize();
+	ReservePoints(numPoints);
+	for (size_t i = 0; i < numPoints; ++i) {
+		AddPoint(src.points[i]);
+	}
+
+	// Copy normals
+	const size_t numNormals = src.normals.GetSize();
+	ReserveNormals(numNormals);
+	for (size_t i = 0; i < numNormals; ++i) {
+		AddNormal(src.normals[i]);
+	}
+
+	// Copy colors
+	const size_t numColors = src.normals.GetSize();
+	ReserveColors(numColors);
+	for (size_t i = 0; i < numColors; ++i) {
+			AddColor(src.colors[i]);
+	}
+
+	// Calculate the amount of space needed to store the point views and weights in a flat array.
+
+	// Copy pointViews
+	if (!src.pointViews.IsEmpty()) {
+		ReservePointViewsSizeAndOffset(numPoints);
+		const size_t numFlatPointViewItems = std::accumulate(
+			std::begin(src.pointViews),
+			std::end(src.pointViews),
+			0,
+			[](const size_t cnt, const auto& i)
+			{
+				return cnt + i.size();
+			}
+		);
+		ReservePointViewsMemory(numFlatPointViewItems);
+
+		for (size_t i = 0; i < numPoints; ++i) {
+			AddViews(src.pointViews[i].begin(), src.pointViews[i].end());
+		}
+	}
+
+	// Copy pointWeights
+	if (!src.pointWeights.IsEmpty()) {
+		ReservePointWeightsSizeAndOffset(numPoints);
+		size_t numFlatPointWeightsItems = std::accumulate(
+			std::begin(src.pointWeights),
+			std::end(src.pointWeights),
+			0,
+			[](const size_t cnt, const auto& i)
+			{
+				return cnt + i.size();
+			}
+		);
+		ReservePointWeightsMemory(numFlatPointWeightsItems);
+
+		for (size_t i = 0; i < numPoints; ++i) {
+			AddWeights(src.pointWeights[i].begin(), src.pointWeights[i].end());
+		}
+	}
+}
+
+void PointCloudStreaming::Release()
+{
+	pointsXYZ.clear();
+	pointViewsOffsets.clear();
+	pointViewsSizes.clear();
+	pointWeightsOffsets.clear();
+	pointWeightsSizes.clear();
+
+	pointViewsMemory.clear();
+	pointWeightsMemory.clear();
+
+	normalsXYZ.clear();
+
+	colorsRGB.clear();
+}
+
+// load the dense point cloud from a PLY file
+bool PointCloudStreaming::Load(const String& fileName)
+{
+	TD_TIMER_STARTD();
+
+	ASSERT(!fileName.IsEmpty());
+	Release();
+
+	// open PLY file and read header
+	PLY ply;
+	if (!ply.read(fileName)) {
+		DEBUG_EXTRA("error: invalid PLY file");
+		return false;
+	}
+
+	// read PLY body
+	BasicPLY::PointColNormal vertex;
+	for (int i = 0; i < (int)ply.elems.size(); i++) {
+		int elem_count;
+		LPCSTR elem_name = ply.setup_element_read(i, &elem_count);
+		if (PLY::equal_strings(BasicPLY::elem_names[0], elem_name)) {
+			PLY::PlyElement* elm = ply.find_element(elem_name);
+			const size_t nMaxProps(SizeOfArray(BasicPLY::vert_props));
+			for (size_t p=0; p<nMaxProps; ++p) {
+				if (ply.find_property(elm, BasicPLY::vert_props[p].name.c_str()) < 0)
+					continue;
+				ply.setup_property(BasicPLY::vert_props[p]);
+				switch (p) {
+				case 0: pointsXYZ.resize((IDX)elem_count*3); break;
+				case 3: colorsRGB.resize((IDX)elem_count*3); break;
+				case 6: normalsXYZ.resize((IDX)elem_count*3); break;
+				}
+			}
+
+			uint8_t unusedColor[3];
+			float unusedNormal[3];
+			float* __restrict pPoints = pointsXYZ.data();
+			uint8_t* __restrict pColors = colorsRGB.empty() ? unusedColor : colorsRGB.data();
+			size_t srcColorOffset = colorsRGB.empty() ? 0 : 3;
+			float* __restrict pNormals = normalsXYZ.empty() ? unusedNormal : normalsXYZ.data();
+			size_t srcNormalOffset = normalsXYZ.empty() ? 0 : 3;
+			for (int v=0; v<elem_count; ++v) {
+				ply.get_element(&vertex);
+
+				pPoints[0] = vertex.p.x;
+				pPoints[1] = vertex.p.y;
+				pPoints[2] = vertex.p.z;
+				pPoints += 3;
+
+				pColors[0] = vertex.c.r;
+				pColors[1] = vertex.c.r;
+				pColors[2] = vertex.c.r;
+				pColors += srcColorOffset;
+
+				pNormals[0] = vertex.n.x;
+				pNormals[1] = vertex.n.y;
+				pNormals[2] = vertex.n.z;
+				pNormals += srcNormalOffset;
+			}
+		} else {
+			ply.get_other_element();
+		}
+	}
+	if (pointsXYZ.empty()) {
+		DEBUG_EXTRA("error: invalid point-cloud");
+		return false;
+	}
+
+	DEBUG_EXTRA("Point-cloud loaded: %u points (%s)", NumPoints(), TD_TIMER_GET_FMT().c_str());
+	return true;
+} // Load
+
+// save the dense point cloud as PLY file
+bool PointCloudStreaming::Save(const String& fileName, bool bLegacyTypes) const
+{
+	if (pointsXYZ.empty())
+		return false;
+	TD_TIMER_STARTD();
+
+	// create PLY object
+	ASSERT(!fileName.IsEmpty());
+	Util::ensureFolder(fileName);
+	PLY ply;
+	if (bLegacyTypes)
+		ply.set_legacy_type_names();
+	if (!ply.write(fileName, 1, BasicPLY::elem_names, PLY::BINARY_LE, 64*1024))
+		return false;
+
+	if (normalsXYZ.empty()) {
+		// describe what properties go into the vertex elements
+		ply.describe_property(BasicPLY::elem_names[0], 6, BasicPLY::vert_props);
+
+		// write the header
+		ply.element_count(BasicPLY::elem_names[0], (int) NumPoints());
+		if (!ply.header_complete())
+			return false;
+
+		// export the array of 3D points
+		BasicPLY::PointColNormal vertex;
+
+		const float* __restrict pPoint = PointStream();
+		uint8_t white[3] = {0xFF, 0xFF, 0xFF};
+		const uint8_t* __restrict pColor;
+		size_t srcColorOffset;
+		if (colorsRGB.empty()) {
+			pColor = white;
+			srcColorOffset = 0;
+		} else {
+			pColor = ColorStream();
+			srcColorOffset = 3;
+		}
+
+		for (size_t i = 0, cnt = NumPoints(); i < cnt; ++i) {
+			// export the vertex position, normal and color
+			vertex.p = PointCloud::Point(pPoint[0], pPoint[1], pPoint[2]);
+			vertex.c = PointCloud::Color(pColor[0], pColor[1], pColor[2]);
+			pPoint += 3;
+			pColor += srcColorOffset;
+			ply.put_element(&vertex);
+		}
+	} else {
+		// describe what properties go into the vertex elements
+		ply.describe_property(BasicPLY::elem_names[0], 9, BasicPLY::vert_props);
+
+		// write the header
+		ply.element_count(BasicPLY::elem_names[0], (int)NumPoints());
+		if (!ply.header_complete())
+			return false;
+
+		// export the array of 3D points
+
+		BasicPLY::PointColNormal vertex;
+		const float* __restrict pPoint = pointsXYZ.data();
+		const float* __restrict pNormal = normalsXYZ.data();
+		uint8_t white[3] = {0xFF, 0xFF, 0xFF};
+		const uint8_t* __restrict pColor;
+		size_t srcColorOffset;
+		if (colorsRGB.empty()) {
+			pColor = white;
+			srcColorOffset = 0;
+		} else {
+			pColor = colorsRGB.data();
+			srcColorOffset = 3;
+		}
+
+		for (size_t i = 0, cnt = NumPoints(); i < cnt; ++i) {
+			// export the vertex position, normal and color
+			vertex.p = PointCloud::Point(pPoint[0], pPoint[1], pPoint[2]);
+			vertex.n = PointCloud::Normal(pNormal[0], pNormal[1], pNormal[2]);
+			pPoint += 3;
+			pNormal += 3;
+			vertex.c = PointCloud::Color(pColor[0], pColor[1], pColor[2]);
+			pColor += srcColorOffset;
+
+			ply.put_element(&vertex);
+		}
+	}
+
+	DEBUG_EXTRA("Point-cloud saved: %u points (%s)", NumPoints(), TD_TIMER_GET_FMT().c_str());
+	return true;
+} // Save
+
+// save the dense point cloud having >=N views as PLY file
+bool PointCloudStreaming::SaveNViews(const String& fileName, uint32_t minViews, bool bLegacyTypes) const
+{
+	if (pointsXYZ.empty())
+		return false;
+	TD_TIMER_STARTD();
+
+	// create PLY object
+	ASSERT(!fileName.IsEmpty());
+	Util::ensureFolder(fileName);
+	PLY ply;
+	if (bLegacyTypes)
+		ply.set_legacy_type_names();
+	if (!ply.write(fileName, 1, BasicPLY::elem_names, PLY::BINARY_LE, 64*1024))
+		return false;
+
+	const int numProperties = normalsXYZ.empty() ? 6 : 9;
+	// describe what properties go into the vertex elements
+	ply.describe_property(BasicPLY::elem_names[0], numProperties, BasicPLY::vert_props);
+
+	// export the array of 3D points
+	BasicPLY::PointColNormal vertex;
+
+	const float* __restrict pPoint = PointStream();
+
+	const float* __restrict pNormal = NormalStream();
+	const size_t srcNormalOffset = pNormal ? 3 : 0;
+	const Point3f normal(1.f, 0.f, 0.f);
+	if (!pNormal) {
+		pNormal = &normal.x;
+	}
+
+	uint8_t white[3] = {0xFF, 0xFF, 0xFF};
+	const uint8_t* __restrict pColor = ColorStream();
+	const size_t srcColorOffset = pColor ? 3 : 0;
+	if (!pColor) {
+		pColor = white;
+	}
+
+	for (size_t i = 0, cnt = NumPoints(); i < cnt; ++i) {
+		if (pointViewsSizes[i] < minViews)
+			continue;
+		// export the vertex position, normal and color
+		vertex.p = PointCloud::Point(pPoint[0], pPoint[1], pPoint[2]);
+		pPoint += 3;
+
+		vertex.c = PointCloud::Color(pColor[0], pColor[1], pColor[2]);
+		pColor += srcColorOffset;
+
+		vertex.n = PointCloud::Normal(pNormal[0], pNormal[1], pNormal[2]);
+		pNormal += srcNormalOffset;
+
+		ply.put_element(&vertex);
+	}
+
+	const int numPoints(ply.get_current_element_count());
+
+	// write the header
+	if (!ply.header_complete())
+		return false;
+
+	DEBUG_EXTRA("Point-cloud saved: %u points with at least %u views each (%s)", numPoints, minViews, TD_TIMER_GET_FMT().c_str());
+	return true;
+} // SaveNViews
+
+void PointCloudStreaming::RemovePoint(IDX idx)
+{
+	// This does not remove the memory used by pointViewsMemory and pointWeightsMemory.
+
+	pointViewsOffsets.erase(std::begin(pointWeightsSizes) + idx);
+	pointViewsSizes.erase(std::begin(pointWeightsSizes) + idx);
+
+	pointWeightsOffsets.erase(std::begin(pointWeightsSizes) + idx);
+	pointWeightsSizes.erase(std::begin(pointWeightsSizes) + idx);
+
+	normalsXYZ.erase(std::begin(normalsXYZ) + idx*3, std::begin(normalsXYZ) + (idx+1)*3);
+	colorsRGB.erase(std::begin(colorsRGB) + idx*3, std::begin(colorsRGB) + (idx+1)*3);
+	pointsXYZ.erase(std::begin(pointsXYZ) + idx*3, std::begin(pointsXYZ) + (idx+1)*3);
+}
+
+// compute the axis-aligned bounding-box of the point-cloud
+PointCloudStreaming::Box PointCloudStreaming::GetAABB() const
+{
+	Box box(true);
+	for (size_t i = 0, cnt = NumPoints(); i < cnt; ++i) {
+		const Point3f& X = Point(i);
+		box.InsertFull(X);
+	}
+	return box;
+}
+// same, but only for points inside the given AABB
+PointCloudStreaming::Box PointCloudStreaming::GetAABB(const Box& bound) const
+{
+	Box box(true);
+	for (size_t i = 0, cnt = NumPoints(); i < cnt; ++i) {
+		const Point3f& X = Point(i);
+		if (bound.Intersects(X))
+			box.InsertFull(X);
+	}
+	return box;
+}
+// compute the axis-aligned bounding-box of the point-cloud
+// with more than the given number of views
+PointCloudStreaming::Box PointCloudStreaming::GetAABB(unsigned minViews) const
+{
+	if (pointViewsSizes.empty())
+		return GetAABB();
+	Box box(true);
+	for (size_t i = 0, cnt = NumPoints(); i < cnt; ++i) {
+		if (pointViewsSizes[i] >= minViews)
+			box.InsertFull(Point(i));
+	}
+	return box;
+}
+
+// compute the center of the point-cloud as the median
+TPoint3<float> PointCloudStreaming::GetCenter() const
+{
+	const Index step(5);
+	const Index numPoints(NumPoints()/step);
+	if (numPoints == 0)
+		return TPoint3<float>::INF;
+	typedef CLISTDEF0IDX(float,Index) Scalars;
+	Scalars x(numPoints), y(numPoints), z(numPoints);
+	for (Index i=0; i<numPoints; ++i) {
+		const Point3f& X = Point(i*step);
+		x[i] = X.x;
+		y[i] = X.y;
+		z[i] = X.z;
+	}
+	return Point3f(x.GetMedian(), y.GetMedian(), z.GetMedian());
+}
 /*----------------------------------------------------------------*/

@@ -82,8 +82,6 @@ public:
 	ColorArr colors;
 
 public:
-	inline PointCloud() {}
-
 	void Release();
 
 	inline bool IsEmpty() const { ASSERT(points.GetSize() == pointViews.GetSize() || pointViews.IsEmpty()); return points.IsEmpty(); }
@@ -101,24 +99,238 @@ public:
 
 	Planef EstimateGroundPlane(const ImageArr& images, float planeThreshold=0, const String& fileExportPlane="") const;
 
+	void PrintStatistics(const Image* pImages = NULL, const OBB3f* pObb = NULL) const;
+};
+
+class MVS_API PointCloudStreaming
+{
+public:
+	PointCloudStreaming() = default;
+	PointCloudStreaming(const PointCloud& src);
+
+	void ReserveColors(size_t cnt)
+	{
+		colorsRGB.reserve(cnt*3);
+	}
+
+	void ReservePoints(size_t cnt)
+	{
+		pointsXYZ.reserve(cnt*3);
+	}
+
+	void ReserveNormals(size_t cnt)
+	{
+		normalsXYZ.reserve(cnt*3);
+	}
+
+	void ReservePointViewsMemory(size_t cnt)
+	{
+		pointViewsMemory.reserve(cnt);
+	}
+
+	void ReservePointViewsSizeAndOffset(size_t cnt)
+	{
+		pointViewsOffsets.reserve(cnt);
+		pointViewsSizes.reserve(cnt);
+	}
+
+	void ReservePointWeightsMemory(size_t cnt)
+	{
+		pointWeightsMemory.reserve(cnt);
+	}
+
+	void ReservePointWeightsSizeAndOffset(size_t cnt)
+	{
+		pointWeightsOffsets.reserve(cnt);
+		pointWeightsSizes.reserve(cnt);
+	}
+
+	void AddView(uint32_t idx)
+	{
+		pointViewsSizes.push_back(1);
+		pointViewsOffsets.push_back((uint32_t)pointViewsMemory.size());
+		pointViewsMemory.push_back(idx);
+	}
+
+	template<class T>
+	void AddViews(T first, T last)
+	{
+		size_t cnt = last-first;
+		pointViewsSizes.push_back(cnt);
+		pointViewsOffsets.push_back((uint32_t) pointViewsMemory.size());
+
+		while (cnt-- > 0) {
+			pointViewsMemory.push_back(*first);
+			++first;
+		}
+	}
+
+	void AddWeight(float weight)
+	{
+		pointWeightsSizes.push_back(1);
+		pointWeightsOffsets.push_back((uint32_t) pointWeightsMemory.size());
+		pointWeightsMemory.push_back(weight);
+	}
+
+	template<class T>
+	void AddWeights(T first, T last)
+	{
+		size_t cnt = last-first;
+		pointWeightsSizes.push_back(cnt);
+		pointWeightsOffsets.push_back((uint32_t) pointWeightsMemory.size());
+
+		while (cnt-- > 0) {
+			pointWeightsMemory.push_back(*first);
+			++first;
+		}
+	}
+
+	void ClearWeights()
+	{
+		pointWeightsMemory.clear();
+		pointWeightsOffsets.clear();
+		pointWeightsSizes.clear();
+	}
+
+	void AddColor(const Pixel8U& color)
+	{
+		colorsRGB.emplace_back(color.r);
+		colorsRGB.emplace_back(color.g);
+		colorsRGB.emplace_back(color.b);
+	}
+
+	void AddColorGray(const uint8_t color)
+	{
+		colorsRGB.emplace_back(color);
+		colorsRGB.emplace_back(color);
+		colorsRGB.emplace_back(color);
+	}
+
+	void AddColor(const uint8_t* color)
+	{
+		colorsRGB.emplace_back(color[0]);
+		colorsRGB.emplace_back(color[1]);
+		colorsRGB.emplace_back(color[2]);
+	}
+
+	void AddNormal(const Point3f& pt)
+	{
+		normalsXYZ.emplace_back(pt.x);
+		normalsXYZ.emplace_back(pt.y);
+		normalsXYZ.emplace_back(pt.z);
+	}
+
+	void AddPoint(const Point3f& pt)
+	{
+		pointsXYZ.emplace_back(pt.x);
+		pointsXYZ.emplace_back(pt.y);
+		pointsXYZ.emplace_back(pt.z);
+	}
+
+	const uint8_t* ColorStream() const noexcept { return colorsRGB.empty() ? nullptr : colorsRGB.data(); }
+	const float* NormalStream() const noexcept { return normalsXYZ.empty() ? nullptr : normalsXYZ.data(); }
+	const float* PointStream() const noexcept { return pointsXYZ.empty() ? nullptr : pointsXYZ.data(); }
+
+	const Pixel8U& Color(size_t idx) const { return *(Pixel8U*)(ColorStream()+idx*3); }
+	Pixel8U& Color(size_t idx) { return *(Pixel8U*)(ColorStream()+idx*3); }
+
+	const Point3f& Normal(size_t idx) const { return *(Point3f*)(NormalStream()+idx*3); }
+	Point3f& Normal(size_t idx) { return *(Point3f*)(NormalStream()+idx*3); }
+
+	const Point3f& Point(size_t idx) const { return *(Point3f*)(PointStream()+idx*3); }
+	Point3f& Point(size_t idx) { return *(Point3f*)(PointStream()+idx*3); }
+
+	const uint32_t* ViewsStream(size_t idx) const
+	{
+		return pointViewsMemory.empty() ? nullptr : &pointViewsMemory[pointViewsOffsets[idx]];
+	}
+
+	const size_t ViewsStreamSize(size_t idx) const
+	{
+		return pointViewsSizes.empty() ? 0 : pointViewsSizes[idx];
+	}
+
+	const float* WeightsStream(size_t idx) const
+	{
+		return pointWeightsMemory.size() ? nullptr : &pointWeightsMemory[pointWeightsOffsets[idx]];
+	}
+
+	const size_t WeightsStreamSize(size_t idx) const
+	{
+		return pointWeightsSizes.empty() ? 0 : pointWeightsSizes[idx];
+	}
+
+	void Release();
+
+	void ReleaseWeights()
+	{
+		pointWeightsOffsets.clear();
+		pointWeightsSizes.clear();
+		pointWeightsMemory.clear();
+	}
+
+	void RemovePoint(IDX);
+
+	typedef TOctree<std::vector<Point3f>,TPoint3<float>::Type,3> Octree;
+
+	typedef IDX Index;
+	typedef AABB3f Box;
+
+	Box GetAABB() const;
+	Box GetAABB(const Box& bound) const;
+	Box GetAABB(unsigned minViews) const;
+	TPoint3<float> GetCenter() const;
+
+	size_t NumPoints() const { return pointsXYZ.size()/3; }
+
+	inline bool IsEmpty() const { return pointsXYZ.empty(); }
+	inline bool IsValid() const { return !pointWeightsMemory.empty(); }
+	inline size_t GetSize() const { return pointsXYZ.size()/3; }
+
 	bool Load(const String& fileName);
 	bool Save(const String& fileName, bool bLegacyTypes=false) const;
 	bool SaveNViews(const String& fileName, uint32_t minViews, bool bLegacyTypes=false) const;
-
-	void PrintStatistics(const Image* pImages = NULL, const OBB3f* pObb = NULL) const;
 
 	#ifdef _USE_BOOST
 	// implement BOOST serialization
 	template <class Archive>
 	void serialize(Archive& ar, const unsigned int /*version*/) {
-		ar & points;
-		ar & pointViews;
-		ar & pointWeights;
-		ar & normals;
-		ar & colors;
+		ar & pointsXYZ;
+		ar & pointViewsOffsets;
+		ar & pointViewsSizes;
+		ar & pointWeightsOffsets;
+		ar & pointWeightsSizes;
+		ar & pointViewsMemory;
+		ar & pointWeightsMemory;
+		ar & normalsXYZ;
+		ar & colorsRGB;
 	}
 	#endif
+
+	//
+	// All points in a cloud are of the format:
+	// {xyz} {xyz, normal} {xyz, normal, color} {xyz, color}
+	// 
+	// If the cloud contains point views and point weights, each point "i"
+	// will have set of pointViewsSizes[i] view indexes stored
+	// at pointViewsMemory[pointViewsOffsets[i]].  Point weights are stored
+	// similarly.
+	// 
+	std::vector<float> pointsXYZ;
+
+	std::vector<uint32_t> pointViewsOffsets;  // Within pointViewsMemory
+	std::vector<uint32_t> pointViewsSizes;
+	std::vector<uint32_t> pointWeightsOffsets;// Within pointWeightsMemory
+	std::vector<uint32_t> pointWeightsSizes;
+
+	std::vector<uint32_t> pointViewsMemory;
+	std::vector<float> pointWeightsMemory;
+
+	std::vector<float> normalsXYZ;
+
+	std::vector<uint8_t> colorsRGB;
 };
+
 /*----------------------------------------------------------------*/
 
 
@@ -136,13 +348,13 @@ struct IntersectRayPoints {
 	typedef TCone<REAL, 3> Cone3;
 	typedef TConeIntersect<REAL, 3> Cone3Intersect;
 
-	const PointCloud& pointcloud;
+	const PointCloudStreaming& pointcloud;
 	const Cone3 cone;
 	const Cone3Intersect coneIntersect;
 	const unsigned minViews;
 	IndexDist pick;
 
-	IntersectRayPoints(const Octree& octree, const Ray3& _ray, const PointCloud& _pointcloud, unsigned _minViews)
+	IntersectRayPoints(const Octree& octree, const Ray3& _ray, const PointCloudStreaming& _pointcloud, unsigned _minViews)
 		: pointcloud(_pointcloud), cone(_ray, D2R(REAL(0.5))), coneIntersect(cone), minViews(_minViews)
 	{
 		octree.Collect(*this, *this);
@@ -156,9 +368,9 @@ struct IntersectRayPoints {
 		// test ray-point intersection and keep the closest
 		FOREACHRAWPTR(pIdx, idices, size) {
 			const PointCloud::Index idx(*pIdx);
-			if (!pointcloud.pointViews.IsEmpty() && pointcloud.pointViews[idx].size() < minViews)
+			if (pointcloud.ViewsStreamSize(idx) < minViews)
 				continue;
-			const PointCloud::Point& X = pointcloud.points[idx];
+			const PointCloud::Point& X = pointcloud.Point(idx);
 			REAL dist;
 			if (coneIntersect.Classify(Cast<REAL>(X), dist) == VISIBLE) {
 				ASSERT(dist >= 0);
