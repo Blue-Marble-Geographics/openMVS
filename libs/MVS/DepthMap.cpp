@@ -1231,11 +1231,11 @@ bool DepthEstimator::IsScorable3(
 	// the compares below.
 	_MM_TRANSPOSE4_PS(vXYZ, vUR, vLL, vLR);
 
-	_Data vCornersX = vXYZ;
-	_Data vCornersY = vUR;
-	_Data vCornersZ = vLL;
-	_Data vCornersWidthZ = _Mul(vCornersZ, vImageWidthWithBorder);
-	_Data vCornersHeightZ = _Mul(vCornersZ, vImageHeightWithBorder);
+	const _Data vCornersX = vXYZ;
+	const _Data vCornersY = vUR;
+	const _Data vCornersZ = vLL;
+	const _Data vCornersWidthZ = _Mul(vCornersZ, vImageWidthWithBorder);
+	const _Data vCornersHeightZ = _Mul(vCornersZ, vImageHeightWithBorder);
 
 	// Cmp leaves 1's if true, 0 otherwise.
 	const _Data vLtX = _CmpLT(vCornersX, vCornersZ);
@@ -1314,10 +1314,6 @@ struct SampleInfo
 	_Data vSum4;
 	_Data vSumSq4;
 	_Data vNum4;
-};
-
-constexpr _DataI vMask2 ={
-	{-1,-1.-1,-1,0x00,0x00,0x00,0x00,-1,-1.-1,-1,0x00,0x00,0x00,0x00}
 };
 
 enum eSPIResult { eNoDepthMap = 1, eMissedDepthMap = 2, eHitDepthMap = 3 };
@@ -1744,7 +1740,7 @@ bool DepthEstimator::ScorePixelImage(
 	#if DENSE_NCC == DENSE_NCC_FAST
 	const float normSq1(sumSq-SQUARE(sum/nSizeWindow));
 	#elif DENSE_NCC == DENSE_NCC_WEIGHTED
-	const float normSq1(sumSq-SQUARE(sum)/pWeightMap0Info.sumWeights);
+	const float normSq1(sumSq-SQUARE(sum) * pWeightMap0Info.invSumWeights);
 	#else
 	const float normSq1(normSqDelta<float,float,nTexels>(texels1.data(), sum/(float)nTexels));
 	#endif
@@ -2040,12 +2036,9 @@ float DepthEstimator::ScorePixel(Depth depth, const Normal4 normal)
 	}
 #else
 	scoreResults.numScoreResults = 0;
-	const size_t numImages = sh.imageInfo.size();
-
 	// Only called for estimating depth-maps (after first pass).
 	// Scorable roughly 90% of the time.
-	for (size_t i = 0; i < numImages; ++i) {
-		const auto& image = sh.imageInfo[i];
+	for (const auto& image : sh.imageInfo) {
 		if (IsScorable3(image)) {
 			scoreResults.numScoreResults += ScorePixelImage(image);
 		}
@@ -2129,7 +2122,7 @@ float DepthEstimator::ScorePixel(Depth depth, const Normal4 normal)
 #endif
 
 		if (hasDepthMapData) {
-			constexpr _Data vDefaultConsistencies = { 4.f, 4.f, 4.f, 4.f }; // Default
+			constexpr _Data vDefaultConsistencies = { 4.f, 4.f, 4.f, 4.f };
 
 			// JPB WIP Hardcoded for GROUP_SIZE=4
 			_Data vx0x1x2x3 = scoreResults.pVs[i];
@@ -2193,7 +2186,24 @@ float DepthEstimator::ScorePixel(Depth depth, const Normal4 normal)
 		// Frequently called during first pass.
 		// Scorable almost all of the time.
 		const _Data vScaledDeltaDepth = _Mul(vFactorDeltaDepth, sh.mvDeltaDepth);
-		for (size_t i = 0; i < numElems; i += GROUP_SIZE) {
+
+		// Groups of two to reduce stalls.
+		size_t i = 0;
+		size_t numGroups = numElems / (GROUP_SIZE*2);
+		while (numGroups--) {
+			const _Data vCurrentScore1 = _LoadA(&scoreResults.pScores[i]);
+			const _Data vCurrentScore2 = _LoadA(&scoreResults.pScores[i+GROUP_SIZE]);
+			const _Data vFactoredScore1 = _Mul(vCurrentScore1, vOneMinusFactorDeltaDepth);
+			const _Data vFactoredScore2 = _Mul(vCurrentScore2, vOneMinusFactorDeltaDepth);
+			const _Data vFinalFactoredScore1 = _Add(vFactoredScore1, vScaledDeltaDepth);
+			const _Data vFinalFactoredScore2 = _Add(vFactoredScore2, vScaledDeltaDepth);
+			_StoreA(&scoreResults.pScores[i], vFinalFactoredScore1);
+			_StoreA(&scoreResults.pScores[i+GROUP_SIZE], vFinalFactoredScore2);
+			i += GROUP_SIZE*2;
+		}
+
+		// Handle the odd group if necessary.
+		if (numElems & (GROUP_SIZE*2-1)) {
 			const _Data vCurrentScore = _LoadA(&scoreResults.pScores[i]);
 			const _Data vFactoredScore = _Add(_Mul(vCurrentScore, vOneMinusFactorDeltaDepth), vScaledDeltaDepth);
 			_StoreA(&scoreResults.pScores[i], vFactoredScore);

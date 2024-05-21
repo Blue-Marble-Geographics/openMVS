@@ -525,13 +525,13 @@ const extern __declspec( selectany ) _Data vPI ={ (float) VL_PI, (float) VL_PI, 
 
 static __forceinline _Data FastACos(_Data vX)
 {
-  static const _Data vOne = {1.f, 1.f, 1.f, 1.f};
+  const _Data vOne = {1.f, 1.f, 1.f, 1.f};
 
   _Data vNegate = Blend(vX, vOne, _CmpLT(vX, _SetZero()));
 
   vX = FastAbs(vX);
 
-  static const _Data vC[] = {
+  const _Data vC[] = {
     {-0.0187293f, -0.0187293f, -0.0187293f, -0.0187293f},
     {0.0742610f, 0.0742610f, 0.0742610f, 0.0742610f},
     {0.2121144f, 0.2121144f, 0.2121144f, 0.2121144f},

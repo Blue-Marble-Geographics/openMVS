@@ -73,7 +73,8 @@
 #define DPC_FASTER_SCORE_PIXEL_DETAIL2
 
 // Use a parallel version of pca_estimate_normals (requires TBB)?
-#define DPC_FASTER_NORMAL_ESTIMATION
+// JPB WIP OPT Restore when the support for this can be added to the build.
+#undef DPC_FASTER_NORMAL_ESTIMATION
 
 // DPC_FASTER_SAMPLING related:
 

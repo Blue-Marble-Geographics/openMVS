@@ -430,6 +430,7 @@ bool DepthMapsData::InitViews(DepthData& depthData, IIndex idxNeighbor, IIndex n
 #endif
 	}
 	// initialize views
+	depthData.images[0].Init(viewRef.camera); // JPB WIP BUG
 	for (IIndex i=1; i<depthData.images.size(); ++i) {
 		DepthData::ViewData& view = depthData.images[i];
 		if (loadDepthMaps > 0) {
@@ -641,7 +642,7 @@ void* STCALL DepthMapsData::ScoreDepthMapTmp(void* arg)
 		}
 		Depth& depth = estimator.depthMap0(x);
 		Normal& normal = estimator.normalMap0(x);
-		const Normal viewDir(Cast<float>(static_cast<const Point3&>(estimator.X0)));
+		const Normal viewDir(_AsArray(estimator.vX0, 0), _AsArray(estimator.vX0, 1), _AsArray(estimator.vX0, 2)); // Cast<float>(static_cast<const Point3&>(estimator.X0)));
 		if (!ISINSIDE(depth, estimator.dMin, estimator.dMax)) {
 			// init with random values
 			depth = estimator.RandomDepth(estimator.rnd, estimator.dMinSqr, estimator.dMaxSqr);
@@ -1767,8 +1768,32 @@ void DepthMapsData::FuseDepthMaps(PointCloudStreaming& pointcloud, bool bEstimat
 	bool bNormalMap(true);
 	std::vector<bool> depthDataEmpty(arrDepthData.size());
 
+	std::vector<TRMatrixBase<float>> imagesCameraRt;
+	std::vector<Matrix3x4f> imagesCameraP;
+	std::vector<Matrix4x4f> imagesCameraPt;
+	imagesCameraRt.reserve(scene.images.size());
+
 	FOREACH(i, scene.images) {
 		DepthData& depthData = arrDepthData[i];
+		imagesCameraRt.emplace_back(Cast<TRMatrixBase<float>>(scene.images[i].camera.R));
+		imagesCameraP.emplace_back(Cast<float>(scene.images[i].camera.P));
+
+		Matrix4x4 tmp = Matrix4x4::IDENTITY;
+		for (auto r = 0; r < scene.images[i].camera.P.rows; ++r) { //3
+			for (auto c = 0; c < scene.images[i].camera.P.cols; ++c) { //4
+				tmp(r, c) = scene.images[i].camera.P(r, c);
+			}
+		}
+
+		Matrix4x4 tmpt;
+		for (auto r = 0; r < 4; ++r) {
+			for (auto c = 0; c < 4; ++c) {
+				tmpt(r, c) = tmp(c, r);
+			}
+		}
+		tmpt(3, 3) = 0.; // Must be zero
+		imagesCameraPt.emplace_back(Cast<float>(tmpt));
+
 		depthDataEmpty[i] = depthData.IsEmpty();
 		if (!depthData.IsValid())
 			continue;
@@ -1787,8 +1812,7 @@ void DepthMapsData::FuseDepthMaps(PointCloudStreaming& pointcloud, bool bEstimat
 	// fuse all depth-maps, processing the best connected images first
 	const unsigned nMinViewsFuse(MINF(OPTDENSE::nMinViewsFuse, scene.images.GetSize()));
 	const float normalError(COS(FD2R(OPTDENSE::fNormalDiffThreshold)));
-	CLISTDEF0(Depth*) invalidDepths(0, 32);
-	size_t nDepths(0);
+	std::atomic<size_t> nDepths(0);
 	typedef TImage<cuint32_t> DepthIndex;
 	typedef cList<DepthIndex> DepthIndexArr;
 	DepthIndexArr arrDepthIdx(scene.images.GetSize());
@@ -1813,25 +1837,39 @@ void DepthMapsData::FuseDepthMaps(PointCloudStreaming& pointcloud, bool bEstimat
 	::GlobalMemoryStatus(&memState);
 	const size_t bytesAvailable = memState.dwAvailPhys;
 
-	// Split half of what's left between points and views.
+	// Split a quarter of what's left between points and views.
 	const size_t elementSize =
 		std::max(
 			sizeof(decltype(pointcloud.pointViewsMemory)::value_type),
 			sizeof(decltype(pointcloud.pointWeightsMemory)::value_type)
 		);
 
-	const size_t elementsAvailableToUse = (bytesAvailable/elementSize)/2;
-	pointcloud.ReservePointViewsMemory(elementsAvailableToUse/2);
-	pointcloud.ReservePointWeightsMemory(elementsAvailableToUse/2);
+	const size_t nElementsAvailableToUse = (bytesAvailable/elementSize)/4;
+	pointcloud.ReservePointViewsMemory(nElementsAvailableToUse/4);
+	pointcloud.ReservePointWeightsMemory(nElementsAvailableToUse/4);
 
 	Util::Progress progress(_T("Fused depth-maps"), connections.GetSize());
 	GET_LOGCONSOLE().Pause();
 
-	std::vector<uint32_t> views;
-	std::vector<float> weights;
-	std::vector<Proj> projs;
+	const int maxThreads = omp_get_max_threads();
+	std::vector<PointCloudStreaming> pointCloudsByThread(maxThreads);
 
-	FOREACHPTR(pConnection, connections) {
+	const size_t nPointsEstimatePerThread = nPointsEstimate/maxThreads;
+	const size_t nElementsAvailableToUsePerThread = (bytesAvailable/elementSize)/(4 * maxThreads);
+	for (auto& pcs : pointCloudsByThread) {
+		pcs.ReservePoints(nPointsEstimatePerThread);
+		pcs.ReservePointViewsSizeAndOffset(nPointsEstimatePerThread);
+		pcs.ReservePointWeightsSizeAndOffset(nPointsEstimatePerThread);
+		if (bEstimateColor)
+			pcs.ReserveColors(nPointsEstimatePerThread);
+		if (bEstimateNormal)
+			pcs.ReserveNormals(nPointsEstimatePerThread);
+		pcs.ReservePointViewsMemory(nElementsAvailableToUsePerThread/4);
+		pcs.ReservePointWeightsMemory(nElementsAvailableToUsePerThread/4);
+	}
+
+	for (int ci = 0; ci < connections.size(); ++ci) {
+		auto* pConnection = connections.begin() + ci;
 		TD_TIMER_STARTD();
 		const uint32_t idxImage(pConnection->idx);
 		const DepthData& depthData(arrDepthData[idxImage]);
@@ -1864,6 +1902,21 @@ void DepthMapsData::FuseDepthMaps(PointCloudStreaming& pointcloud, bool bEstimat
 		const size_t nNumPointsPrev(pointcloud.NumPoints());
 		const size_t numNeighbors = depthData.neighbors.size();
 
+		std::vector<uint32_t> views;
+		std::vector<float> weights;
+		std::vector<Proj> projs;
+				CLISTDEF0(Depth*) invalidDepths(0, 32);
+
+
+// JPB WIP BUG
+#pragma omp parallel for num_threads(maxThreads) private( views, weights, projs, invalidDepths)
+		for (int i=0; i<sizeMap.height; ++i) {
+			const int thread_idx = omp_get_thread_num();
+			auto& pcs = pointCloudsByThread[thread_idx];
+
+			const Depth* __restrict pDM = &depthData.depthMap(i, 0);
+			cuint32_t* __restrict pDepthIdxs = &depthIdxs(i, 0);
+
 		const float* __restrict pConfMap;
 		bool confMapEmpty = depthData.confMap.empty();
 		if (confMapEmpty) {
@@ -1872,10 +1925,6 @@ void DepthMapsData::FuseDepthMaps(PointCloudStreaming& pointcloud, bool bEstimat
 		} else {
 			confMapInc = 1;
 		}
-
-		for (int i=0; i<sizeMap.height; ++i) {
-			const Depth* __restrict pDM = &depthData.depthMap(i, 0);
-			cuint32_t* __restrict pDepthIdxs = &depthIdxs(i, 0);
 
 			if (!confMapEmpty) {
 				pConfMap = &depthData.confMap(i, 0);
@@ -1908,19 +1957,33 @@ void DepthMapsData::FuseDepthMaps(PointCloudStreaming& pointcloud, bool bEstimat
 			double pointXNoDepthPreTransformDelta = invImageDataCameraK00;
 			double pointYNoDepthPreTransform = (i-imageDataCameraK12)*invImageDataCameraK11;
 
+			struct Estimate_t {
+				Estimate_t(const Image* _image, const ImageRef& _ref, float _confidenceB) :
+					image(_image),
+					ref(_ref),
+					confidenceB(_confidenceB)
+				{}
+
+				const Image* image;
+				ImageRef ref;
+				float confidenceB;
+			};
+			boost::container::small_vector<Estimate_t, 16> estimateRefs;
+
+			int localDepths = 0;
 			for (int j=0; j<sizeMap.width; ++j, pConfMap += confMapInc, imagePoint += imageDataHBasis, pointXNoDepthPreTransform += pointXNoDepthPreTransformDelta) {
 				//const ImageRef x(j,i);
 				const Depth depth(pDM[j]); //depthData.depthMap(x));
 				if (depth == 0)
 					continue;
-				++nDepths;
+				++localDepths;
 				ASSERT(ISINSIDE(depth, depthData.dMin, depthData.dMax));
 				uint32_t& idxPoint = pDepthIdxs[j]; //depthIdxs(x);
 				if (idxPoint != NO_ID)
 					continue;
 				// create the corresponding 3D point
 
-				idxPoint = pointcloud.NumPoints();
+				idxPoint = (int) pcs.NumPoints();
 
 				Point3f point;
 
@@ -1956,7 +2019,6 @@ void DepthMapsData::FuseDepthMaps(PointCloudStreaming& pointcloud, bool bEstimat
 					+	imageData.camera.R[2*3+2] * pointZWithDepth
 					+ imageData.camera.C.z;
 
-
 				//point = (imageData.camera.R.t() * Point3(xx, yy, zz)) + imageData.camera.C;
 
 				// pViews->Insert(idxImage);
@@ -1974,7 +2036,26 @@ void DepthMapsData::FuseDepthMaps(PointCloudStreaming& pointcloud, bool bEstimat
 				projs.emplace_back(x);
 
 				//const PointCloud::Normal normal(bNormalMap ? Cast<Normal::Type>(imageData.camera.R.t()*Cast<REAL>(depthData.normalMap(x))) : Normal(0,0,-1));
-				const PointCloud::Normal normal(bNormalMap ? Cast<Normal::Type>(imageData.camera.R.t()*Cast<REAL>(pNormalMap[j])) : Normal(0,0,-1));
+				PointCloud::Normal normal;
+				if (bNormalMap) {
+					const Normal& n = pNormalMap[j];
+					normal.x =
+						imageData.camera.R[0*3+0] * n.x
+						+	imageData.camera.R[1*3+0] * n.y
+						+	imageData.camera.R[2*3+0] * n.z;
+
+					normal.y =
+						imageData.camera.R[0*3+1] * n.x
+						+	imageData.camera.R[1*3+1] * n.y
+						+	imageData.camera.R[2*3+1] * n.z;
+
+					normal.z =
+						imageData.camera.R[0*3+2] * n.x
+						+	imageData.camera.R[1*3+2] * n.y
+						+	imageData.camera.R[2*3+2] * n.z;
+				} else {
+					normal ={ 0.f, 0.f, -1.f };
+				}
 				ASSERT(ISEQUAL(norm(normal), 1.f));
 				// check the projection in the neighbor depth-maps
 				Point3 X(point*confidence);
@@ -1982,59 +2063,118 @@ void DepthMapsData::FuseDepthMaps(PointCloudStreaming& pointcloud, bool bEstimat
 				PointCloud::Normal N(normal*confidence);
 				invalidDepths.Empty(); // JPB Make this a boost small_vector sized to sizeMap.width
 
-				struct Estimate_t {
-					Estimate_t(const Image* _image, const ImageRef& _ref, float _confidenceB) :
-						image(_image),
-						ref(_ref),
-						confidenceB(_confidenceB)
-					{}
+#if 1
+				estimateRefs.clear();
 
-					const Image* image;
-					ImageRef ref;
-					float confidenceB;
-				};
+				_Data vPointX = _Set(point.x);
+				_Data vPointY = _Set(point.y);
+				_Data vPointZ = _Set(point.z);
+				for (int i = 0, cnt = depthData.neighbors.size(); i < cnt; ++i) {
+					const auto pNeighbor = &depthData.neighbors[i];
 
-				boost::container::small_vector<Estimate_t, 8> estimateRefs;
-
-				FOREACHPTR(pNeighbor, depthData.neighbors) {
 					const IIndex idxImageB(pNeighbor->idx.ID);
+					const Image& imageDataB = scene.images[idxImageB];
+					const auto& imageDataBCameraPt = imagesCameraPt[idxImageB];
 					DepthData& depthDataB = arrDepthData[idxImageB];
 					ASSERT(!depthDataB.IsEmpty());
-					const Image& imageDataB = scene.images[idxImageB];
+					DepthMap& depthMapB = depthDataB.depthMap;
 
+					_Data col0 = _Load(&imageDataBCameraPt[0]);
+					_Data col1 = _Load(&imageDataBCameraPt[4]);
+					_Data col2 = _Load(&imageDataBCameraPt[8]);
+					_Data col3 = _Load(&imageDataBCameraPt[12]); // col3.w is always 0
+
+					_Data col0_point = _Mul(col0, vPointX); // ptx, pty, ptz
+					_Data col1_point = _Mul(col1, vPointY);
+					_Data col2_point = _Mul(col2, vPointZ);
+
+					_Data xyz_1 = _Add(col0_point, col1_point);
+					_Data xyz_2 = _Add(col2_point, col3);
+					_Data xyz0 = _Add(xyz_1, xyz_2);
+					_Data zzz = _Splat(xyz0, 2);
+					_Data zzz_wh10 = _Mul(zzz, _SetN(depthMapB.width()-1, depthMapB.height()-1, 1.f, 0.f));
+
+#if 0
+					const auto& imageDataBCameraP = imagesCameraP[idxImageB];
 					float ptz =
-						imageDataB.camera.P[2*4+0] * point.x
-						+	imageDataB.camera.P[2*4+1] * point.y
-						+	imageDataB.camera.P[2*4+2] * point.z
-						+	imageDataB.camera.P[2*4+3];
+						imageDataBCameraP[2*4+0] * point.x
+						+	imageDataBCameraP[2*4+1] * point.y
+						+	imageDataBCameraP[2*4+2] * point.z
+						+	imageDataBCameraP[2*4+3];
 
 					if (ptz <= 0)
 						continue;
 
 					float ptx =
-						imageDataB.camera.P[0*4+0] * point.x
-						+	imageDataB.camera.P[0*4+1] * point.y
-						+	imageDataB.camera.P[0*4+2] * point.z
-						+	imageDataB.camera.P[0*4+3];
+						imageDataBCameraP[0*4+0] * point.x
+						+	imageDataBCameraP[0*4+1] * point.y
+						+	imageDataBCameraP[0*4+2] * point.z
+						+	imageDataBCameraP[0*4+3];
 
 					float pty =
-						imageDataB.camera.P[1*4+0] * point.x
-						+	imageDataB.camera.P[1*4+1] * point.y
-						+	imageDataB.camera.P[1*4+2] * point.z
-						+	imageDataB.camera.P[1*4+3];
+						imageDataBCameraP[1*4+0] * point.x
+						+	imageDataBCameraP[1*4+1] * point.y
+						+	imageDataBCameraP[1*4+2] * point.z
+						+	imageDataBCameraP[1*4+3];
+#endif
 
+					_Data result = _CmpGT(xyz0, zzz_wh10);		// x > z*w, y > z*h, z > z, 0 > 0
+					_Data result2 = _CmpLT(xyz0, _SetZero());	// x < 0, y < 0, z < 0, 0 < 0 
+					_Data orResult = _Or(result, result2);
+					if (!AllZerosI(_CastIF(orResult))) {
+						continue;
+					}
+
+					//_Data imageDataBCameraRow2 = _Load(imageDataB.camera.P + 2*4);
+
+#if 1
+					_Data invZZZ = _Div({ 1.f, 1.f, 1.f, 1.f }, zzz);
+					xyz0 = _Mul(xyz0, invZZZ);
+					float ptz = _vFirst(zzz);
+					_DataI xyz0AsInt = _ConvertIF(xyz0);
+					const ImageRef xB(_AsArrayI(xyz0AsInt, 0), _AsArrayI(xyz0AsInt, 1));
+#else
+				FOREACHPTR(pNeighbor, depthData.neighbors) {
+					const IIndex idxImageB(pNeighbor->idx.ID);
+					const Image& imageDataB = scene.images[idxImageB];
+					const auto& imageDataBCameraP = imagesCameraP[idxImageB];
+
+					float ptz =
+						imageDataBCameraP[2*4+0] * point.x
+						+	imageDataBCameraP[2*4+1] * point.y
+						+	imageDataBCameraP[2*4+2] * point.z
+						+	imageDataBCameraP[2*4+3];
+
+					if (ptz <= 0)
+						continue;
+
+					float ptx =
+						imageDataBCameraP[0*4+0] * point.x
+						+	imageDataBCameraP[0*4+1] * point.y
+						+	imageDataBCameraP[0*4+2] * point.z
+						+	imageDataBCameraP[0*4+3];
+
+					float pty =
+						imageDataBCameraP[1*4+0] * point.x
+						+	imageDataBCameraP[1*4+1] * point.y
+						+	imageDataBCameraP[1*4+2] * point.z
+						+	imageDataBCameraP[1*4+3];
+
+					DepthData& depthDataB = arrDepthData[idxImageB];
+					ASSERT(!depthDataB.IsEmpty());
 					DepthMap& depthMapB = depthDataB.depthMap;
 					if (
-						(ptx >= (depthMapB.width()-1) * ptz)
+						(ptx >= (depthMapB.width()-1.f) * ptz)
 						| (ptx < 0.f)
-						| (pty >= (depthMapB.height()-1) * ptz)
+						| (pty >= (depthMapB.height()-1.f) * ptz)
 						| (pty < 0.f)
 						) {
 						continue;
 					}
-
 					float invZ = 1.f / ptz;
 					const ImageRef xB(ROUND2INT(ptx*invZ), ROUND2INT(pty*invZ));
+#endif
+
 
 					Depth& depthB = depthMapB.pix(xB);
 					if (depthB == 0)
@@ -2047,7 +2187,31 @@ void DepthMapsData::FuseDepthMaps(PointCloudStreaming& pointcloud, bool bEstimat
 					if (FastAbsS(ptz-depthB) < OPTDENSE::fDepthDiffThreshold *ptz) {
 					//if (IsDepthSimilar(pt.z, depthB, OPTDENSE::fDepthDiffThreshold)) {
 						// check if normals agree
+#if 1
+					PointCloud::Normal normalB;
+					if (bNormalMap) {
+						const Normal& nb = depthDataB.normalMap.pix(xB);
+						const TRMatrixBase<float>& imageCameraRt = imagesCameraRt[idxImageB];
+						normalB.x =
+							imageCameraRt[0*3+0] * nb.x
+							+	imageCameraRt[1*3+0] * nb.y
+							+	imageCameraRt[2*3+0] * nb.z;
+
+						normalB.y =
+							imageCameraRt[0*3+1] * nb.x
+							+	imageCameraRt[1*3+1] * nb.y
+							+	imageCameraRt[2*3+1] * nb.z;
+
+						normalB.z =
+							imageCameraRt[0*3+2] * nb.x
+							+	imageCameraRt[1*3+2] * nb.y
+							+	imageCameraRt[2*3+2] * nb.z;
+					} else {
+						normalB ={ 0.f, 0.f, -1.f };
+					}
+#else
 						const PointCloud::Normal normalB(bNormalMap ? Cast<Normal::Type>(imageDataB.camera.R.t()*Cast<REAL>(depthDataB.normalMap.pix(xB))) : Normal(0,0,-1));
+#endif
 						ASSERT(ISEQUAL(norm(normalB), 1.f));
 						if (normal.dot(normalB) > normalError) {
 							// add view to the 3D point
@@ -2110,6 +2274,7 @@ void DepthMapsData::FuseDepthMaps(PointCloudStreaming& pointcloud, bool bEstimat
 						invalidDepths.Insert(&depthB);
 					}
 				}
+#endif
 
 				if (views.size() < nMinViewsFuse) {
 					// remove point
@@ -2153,15 +2318,15 @@ void DepthMapsData::FuseDepthMaps(PointCloudStreaming& pointcloud, bool bEstimat
 					point = X*nrm;
 					ASSERT(ISFINITE(point));
 
-					pointcloud.AddPoint(point);
-					pointcloud.AddViews(std::begin(views), std::end(views));
-					pointcloud.AddWeights(std::begin(weights), std::end(weights));
+					pcs.AddPoint(point);
+					pcs.AddViews(std::begin(views), std::end(views));
+					pcs.AddWeights(std::begin(weights), std::end(weights));
 
 					if (bEstimateColor) {
 						r *= nrm;
 						g *= nrm;
 						b *= nrm;
-						pointcloud.AddColor(Pixel8U(_cvt_ftoi_fast(r), _cvt_ftoi_fast(g), _cvt_ftoi_fast(b)));
+						pcs.AddColor(Pixel8U(_cvt_ftoi_fast(r), _cvt_ftoi_fast(g), _cvt_ftoi_fast(b)));
 						//pointcloud.colors.AddConstruct((C*(float)nrm).cast<uint8_t>());
 					}
 					if (bEstimateNormal) {
@@ -2171,25 +2336,64 @@ void DepthMapsData::FuseDepthMaps(PointCloudStreaming& pointcloud, bool bEstimat
 						}
 						projsarr.Insert(tmp);
 						const Point3f nn(normalized(N* (float)nrm));
-						pointcloud.AddNormal(nn);
+						pcs.AddNormal(nn);
 						//AddConstruct(normalized(N* (float)nrm));
 					}
+
 					// invalidate all neighbor depths that do not agree with it
 					for (Depth* pDepth: invalidDepths)
 						*pDepth = 0;
 				}
 			}
+
+			nDepths += localDepths;
 		}
 
 		// JPB WIP ASSERT(pointcloud.points.GetSize() == pointcloud.pointViews.GetSize() && pointcloud.points.GetSize() == pointcloud.pointWeights.GetSize() && pointcloud.points.GetSize() == projs.GetSize());
 		DEBUG_ULTIMATE("Depths map for reference image %3u fused using %u depths maps: %u new points (%s)", idxImage, depthData.images.GetSize()-1, (pointcloud.NumPoints())-nNumPointsPrev, TD_TIMER_GET_FMT().c_str());
 		progress.display(pConnection-connections.Begin());
 	}
+	
+	// Now combine the per-thread clouds into a single cloud.
+	for (auto& pcs : pointCloudsByThread) {
+		// Copy the points
+		std::copy(std::begin(pcs.pointsXYZ), std::end(pcs.pointsXYZ), std::back_inserter(pointcloud.pointsXYZ));
+		// Copy the views.
+		std::copy(std::begin(pcs.pointViewsSizes), std::end(pcs.pointViewsSizes), std::back_inserter(pointcloud.pointViewsSizes));
+		size_t adder = pointcloud.pointViewsMemory.size();
+		for (auto off : pcs.pointViewsOffsets) {
+			pointcloud.pointViewsOffsets.push_back(off+adder);
+		}
+		for (auto v : pcs.pointViewsMemory) {
+			pointcloud.pointViewsMemory.push_back(v);
+		}
+		// Copy the weights.
+		std::copy(std::begin(pcs.pointWeightsSizes), std::end(pcs.pointWeightsSizes), std::back_inserter(pointcloud.pointWeightsSizes));
+		adder = pointcloud.pointWeightsMemory.size();
+		for (auto off : pcs.pointWeightsOffsets) {
+			pointcloud.pointWeightsOffsets.push_back(off+adder);
+		}
+		for (auto v : pcs.pointWeightsMemory) {
+			pointcloud.pointWeightsMemory.push_back(v);
+		}
+		if (bEstimateColor) {
+			// Copy the colors.
+			std::copy(std::begin(pcs.colorsRGB), std::end(pcs.colorsRGB), std::back_inserter(pointcloud.colorsRGB));
+		}
+		if (bEstimateNormal) {
+			// Copy the normals.
+			std::copy(std::begin(pcs.normalsXYZ), std::end(pcs.normalsXYZ), std::back_inserter(pointcloud.normalsXYZ));
+		}
+	}
+
+
+	
 	GET_LOGCONSOLE().Play();
 	progress.close();
 	arrDepthIdx.Release();
 
-	DEBUG_EXTRA("Depth-maps fused and filtered: %u depth-maps, %u depths, %u points (%d%%%%) (%s)", connections.GetSize(), nDepths, pointcloud.NumPoints(), ROUND2INT((100.f*(pointcloud.NumPoints()))/nDepths), TD_TIMER_GET_FMT().c_str());
+	size_t printDepths = nDepths;
+	DEBUG_EXTRA("Depth-maps fused and filtered: %u depth-maps, %u depths, %u points (%d%%%%) (%s)", connections.GetSize(), printDepths, pointcloud.NumPoints(), ROUND2INT((100.f*(pointcloud.NumPoints()))/nDepths), TD_TIMER_GET_FMT().c_str());
 
 	if (bEstimateNormal && pointcloud.PointStream() && pointcloud.NormalStream()) {
 		// estimate normal also if requested (quite expensive if normal-maps not available)

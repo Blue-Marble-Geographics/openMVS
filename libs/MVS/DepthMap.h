@@ -181,6 +181,8 @@ constexpr int sRemapTbl[25] =
 };
 #endif
 
+enum { nSizeHalfWindow = 4 };
+
 typedef TImage<ViewsID> ViewsMap;
 
 template <int nTexels>
@@ -343,8 +345,17 @@ struct MVS_API DepthData {
 		_Data mHr11Hr11Hr11;
 		_Data mHr02Hr02Hr02;
 		_Data mHr12Hr12Hr12;
+
+		_Data mK02K12;
+		_Data mInvK00K11;
+
+		_Data mWindowShifted;
 		
 		inline void Init(const Camera& cameraRef) {
+			mWindowShifted = _SetN( image.width()-2*nSizeHalfWindow-1, image.height()-2*nSizeHalfWindow-1, 0.f, 0.f);
+			mK02K12 = _SetN(camera.K(0, 2), camera.K(1, 2), 0.f, 0.f);
+			mInvK00K11 = _SetN(1./camera.K(0, 0), 1./camera.K(1, 1), 0.f, 0.f);
+
 			Hl = camera.K * camera.R * cameraRef.R.t();
 			Hm = camera.K * camera.R * (cameraRef.C - camera.C);
 			Hr = cameraRef.K.inv();
@@ -486,7 +497,6 @@ typedef MVS_API CLISTDEFIDX(DepthData,IIndex) DepthDataArr;
 
 
 struct MVS_API DepthEstimator {
-	enum { nSizeHalfWindow = 4 };
 	enum { nSizeWindow = nSizeHalfWindow*2+1 };
 	enum { nSizeStep = 2 };
 	enum { TexelChannels = 1 };
@@ -497,6 +507,7 @@ struct MVS_API DepthEstimator {
 		RB2LT,
 		DIRS
 	};
+//#pragma optimize("", off) // JPB WIP BUG
 
 	typedef TPoint2<uint16_t> MapRef;
 	typedef CLISTDEF0(MapRef) MapRefArr;
@@ -516,6 +527,7 @@ struct MVS_API DepthEstimator {
 	#endif
 #pragma pack(pop)
 
+//#pragma optimize("", off) // JPB WIP BUG
 	#if DENSE_NCC == DENSE_NCC_WEIGHTED
 	typedef WeightedPatchFix<nTexels> Weight;
 	typedef CLISTDEFIDX(Weight,int) WeightMap;
@@ -531,7 +543,6 @@ struct MVS_API DepthEstimator {
 	#else
 	// JPB WIP BUG CLISTDEF0IDX(ImageRef,IIndex) neighbors; // neighbor pixels coordinates to be processed
 	#endif
-	Point3 X0;	      //
 	float mLowResDepth;
 	_Data vX0;
 	ImageRef x0;	  // constants during one pixel loop
@@ -791,24 +802,42 @@ struct MVS_API DepthEstimator {
 
 	bool PreparePixelPatch(const ImageRef& x)
 	{
+		const _DataI vUlxy = _CastIF(_mm_loadl_pi(vX0, (__m64*) &x.x)); // x0.x, x0.y, xx, xx
+		const _Data vUlxyAsF = _ConvertFI(vUlxy);
+		constexpr _Data vHalfWindowSize { nSizeHalfWindow, nSizeHalfWindow, 0.f, 0.f };
+		_Data vZero = _SetZero();
+		_Data vCornerXY = _Sub(vUlxyAsF, vHalfWindowSize);
+		constexpr _DataI vMask {
+			{ -1,-1,-1,-1, -1,-1,-1,-1, 0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00 }
+		};
+		vCornerXY = _And(vCornerXY, _CastFI(vMask));
+		const _Data vNegative = _CmpLT(vCornerXY, vZero);
+		const _Data vPositive = _CmpGT(vCornerXY, image0.mWindowShifted);
+		_mm_storel_pi((__m64*) &x0, _CastFI(vUlxy));
+#if 0
 		// center a patch of given size on the segment
 		int ulx = x.x-nSizeHalfWindow;
 		int uly = x.y-nSizeHalfWindow;
 
 		const bool horizontalInWindow = ( (unsigned)( ulx ) ) < ( (unsigned)image0.image.width()-2*nSizeHalfWindow );
 		const bool verticalInWindow = ( (unsigned)( uly ) ) < ( (unsigned)image0.image.height()-2*nSizeHalfWindow );
-
 		x0 = x;
+#endif
+
 #ifdef DPC_FASTER_SCORE_PIXEL_DETAIL
-		x0ULPatchCorner0 = _Set((float) ulx);
-		x0ULPatchCorner1 = _Set((float) uly);
+		x0ULPatchCorner0 = _Set(_AsArray(vCornerXY, 0)); // (float)ulx);
+		x0ULPatchCorner1 = _Set(_AsArray(vCornerXY, 1)); // (float)uly);
 #else
 		x0ULPatchCorner = Vec2_t((Calc_t)( ulx ), (Calc_t)( uly ));
 		x0ULPatchCorner0 = _mm_set1_pd(x0ULPatchCorner[0]);
 		x0ULPatchCorner1 = _mm_set1_pd(x0ULPatchCorner[1]);
 #endif
-
+#if 1
+		return _mm_movemask_ps(_Or(vNegative, vPositive)) == 0;
+#else
 		return horizontalInWindow && verticalInWindow;
+#endif
+
 	}
 
 		// fetch the patch pixel values in the main image
@@ -1021,8 +1050,17 @@ struct MVS_API DepthEstimator {
 		)
 			return false;
 
-		X0 = image0.camera.TransformPointI2C(Cast<REAL>(x0));
-		vX0 = _SetN((float)X0[0], (float)X0[1], (float)X0[2], 0.f);
+		// X0 = image0.camera.TransformPointI2C(Cast<REAL>(x0));
+		float x = (x0.x - image0.camera.K(0, 2))/image0.camera.K(0, 0);
+		float y = (x0.y - image0.camera.K(1, 2))/image0.camera.K(1, 1);
+		float z = 1.f;
+
+		const _DataI vX0Raw = _CastIF(_mm_loadl_pi(vX0, (__m64*) &x0.x)); // x0.x, x0.y, xx, xx
+		const _Data vX0AsFloat = _ConvertFI(vX0Raw);
+		const _Data vX0AsFloat2 = _Sub(vX0AsFloat, image0.mK02K12);
+		vX0 = _Mul(vX0AsFloat2, image0.mInvK00K11);
+		_AsArray(vX0, 2) = 1.f;
+		// vX0 is 0
 
 		if constexpr( HasLowResDepthMap ) {
 			mLowResDepth = lowResDepthMap.pix(x0);
