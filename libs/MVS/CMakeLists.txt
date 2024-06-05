@@ -1,10 +1,3 @@
-#cmake_minimum_required(VERSION 3.25)
-
-# Set up build environment
-#INCLUDE(../../build/Utils.cmake)
-#set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
-#set(VCPKG_TARGET_TRIPLET "x64-windows")
-#project(openMVS)
 
 # Find required packages
 set(CGAL_DIR "../../cgal-5.5.2")
@@ -14,15 +7,8 @@ if(CGAL_FOUND)
 	add_definitions(${CGAL_DEFINITIONS})
 	link_directories(${CGAL_LIBRARY_DIRS})
 endif()
-#set(VCG_DIR "../../vcglib")
-#FIND_PACKAGE(VCG REQUIRED)
-#if(VCG_FOUND)
-#	include_directories(${VCG_INCLUDE_DIRS})
-#	add_definitions(${VCG_DEFINITIONS})
-#endif()
 add_library(VCG INTERFACE "../../vcglib")
 target_include_directories(VCG INTERFACE .)
-
 
 find_package(TBB REQUIRED)
 include(CGAL_TBB_support) # Includes a module from CGAL
