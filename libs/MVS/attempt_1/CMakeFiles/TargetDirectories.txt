@@ -1,5 +1,0 @@
-D:/BlueMarble/TestZone/openMVS-bmg/libs/MVS/make/CMakeFiles/VCG.dir
-D:/BlueMarble/TestZone/openMVS-bmg/libs/MVS/make/CMakeFiles/MVS.dir
-D:/BlueMarble/TestZone/openMVS-bmg/libs/MVS/make/CMakeFiles/INSTALL.dir
-D:/BlueMarble/TestZone/openMVS-bmg/libs/MVS/make/CMakeFiles/ALL_BUILD.dir
-D:/BlueMarble/TestZone/openMVS-bmg/libs/MVS/make/CMakeFiles/ZERO_CHECK.dir

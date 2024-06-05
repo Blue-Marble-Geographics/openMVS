@@ -1,10 +1,10 @@
-cmake_minimum_required(VERSION 3.25)
+#cmake_minimum_required(VERSION 3.25)
 
 # Set up build environment
-INCLUDE(../../build/Utils.cmake)
-set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
-set(VCPKG_TARGET_TRIPLET "x64-windows")
-project(openMVS)
+#INCLUDE(../../build/Utils.cmake)
+#set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
+#set(VCPKG_TARGET_TRIPLET "x64-windows")
+#project(openMVS)
 
 # Find required packages
 set(CGAL_DIR "../../cgal-5.5.2")
@@ -47,7 +47,6 @@ if(_USE_CUDA)
 	LIST(APPEND LIBRARY_FILES_C ${LIBRARY_FILES_CUDA})
 endif()
 
-include(googletest)
 cxx_library_with_type(MVS "Libs" "" "${cxx_default}"
 	${LIBRARY_FILES_C} ${LIBRARY_FILES_H}
 )
