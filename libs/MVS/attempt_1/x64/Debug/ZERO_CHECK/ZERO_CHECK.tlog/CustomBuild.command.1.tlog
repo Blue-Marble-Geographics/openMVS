@@ -1,0 +1,10 @@
+^D:\BLUEMARBLE\TESTZONE\OPENMVS-BMG\LIBS\MVS\MAKE\CMAKEFILES\DD62BCEDA9274C5178A70320DF082550\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/BlueMarble/TestZone/openMVS-bmg/libs/MVS -BD:/BlueMarble/TestZone/openMVS-bmg/libs/MVS/make --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file D:/BlueMarble/TestZone/openMVS-bmg/libs/MVS/make/openMVS.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

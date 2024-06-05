@@ -1,0 +1,4 @@
+﻿  cmake_pch.cxx
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.39.33519\include\xkeycheck.h(126,1): error C1189: #error:  The C++ Standard Library forbids macroizing the keyword "constexpr". Enable warning C4005 to find the forbidden define.
+  (compiling source file 'CMakeFiles/MVS.dir/cmake_pch.cxx')
+  
