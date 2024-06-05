@@ -1,5 +1,8 @@
+cmake_minimum_required(VERSION 3.25)
+
 # Set up build environment
-set(CMAKE_TOOLCHAIN_FILE "C:\opt\vcpkg\scripts\buildsystems\vcpkg.cmake")
+INCLUDE(../../build/Utils.cmake)
+set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
 set(VCPKG_TARGET_TRIPLET "x64-windows")
 project(openMVS)
 
@@ -11,13 +14,15 @@ if(CGAL_FOUND)
 	add_definitions(${CGAL_DEFINITIONS})
 	link_directories(${CGAL_LIBRARY_DIRS})
 endif()
+#set(VCG_DIR "../../vcglib")
+#FIND_PACKAGE(VCG REQUIRED)
+#if(VCG_FOUND)
+#	include_directories(${VCG_INCLUDE_DIRS})
+#	add_definitions(${VCG_DEFINITIONS})
+#endif()
+add_library(VCG INTERFACE "../../vcglib")
+target_include_directories(VCG INTERFACE .)
 
-set(VCG_DIR "../../vcglib")
-FIND_PACKAGE(VCG REQUIRED)
-if(VCG_FOUND)
-	include_directories(${VCG_INCLUDE_DIRS})
-	add_definitions(${VCG_DEFINITIONS})
-endif()
 
 find_package(TBB REQUIRED)
 include(CGAL_TBB_support) # Includes a module from CGAL
@@ -42,6 +47,7 @@ if(_USE_CUDA)
 	LIST(APPEND LIBRARY_FILES_C ${LIBRARY_FILES_CUDA})
 endif()
 
+include(googletest)
 cxx_library_with_type(MVS "Libs" "" "${cxx_default}"
 	${LIBRARY_FILES_C} ${LIBRARY_FILES_H}
 )
