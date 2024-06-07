@@ -19,6 +19,7 @@
     "libpng",
     "opencv",
 	"opengl",
+    "tbb",
     "tiff",
     "vcglib",
     "zlib"
