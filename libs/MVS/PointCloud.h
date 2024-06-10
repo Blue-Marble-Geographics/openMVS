@@ -45,6 +45,8 @@
 
 namespace MVS {
 
+class PointCloudStreaming;
+
 // a point-cloud containing the points with the corresponding views
 // and optionally weights, normals and colors
 // (same size as the number of points or zero)
@@ -82,6 +84,8 @@ public:
 	ColorArr colors;
 
 public:
+	PointCloud() = default;
+	PointCloud(const PointCloudStreaming& src);
 	void Release();
 
 	inline bool IsEmpty() const { ASSERT(points.GetSize() == pointViews.GetSize() || pointViews.IsEmpty()); return points.IsEmpty(); }
@@ -252,7 +256,7 @@ public:
 
 	const float* WeightsStream(size_t idx) const
 	{
-		return pointWeightsMemory.size() ? nullptr : &pointWeightsMemory[pointWeightsOffsets[idx]];
+		return pointWeightsMemory.empty() ? nullptr : &pointWeightsMemory[pointWeightsOffsets[idx]];
 	}
 
 	const size_t WeightsStreamSize(size_t idx) const

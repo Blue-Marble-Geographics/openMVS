@@ -382,7 +382,7 @@ void PLY::put_element(const void* elem_ptr)
 		/* write an ascii file */
 
 		/* write out each property of the element */
-		for (size_t j = 0; j < elem->props.size(); ++j) {
+		for (size_t j = 0, cnt = elem->props.size(); j < cnt; ++j) {
 
 			PlyProperty *prop = elem->props[j];
 
@@ -431,7 +431,7 @@ void PLY::put_element(const void* elem_ptr)
 		/* write a binary file */
 
 		/* write out each property of the element */
-		for (size_t j = 0; j < elem->props.size(); ++j) {
+		for (size_t j = 0, cnt = elem->props.size(); j < cnt; ++j) {
 			PlyProperty *prop = elem->props[j];
 			if (elem->store_prop[j] == OTHER_PROP)
 				elem_data = *other_ptr;

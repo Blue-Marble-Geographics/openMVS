@@ -38,9 +38,76 @@ using namespace MVS;
 
 // D E F I N E S ///////////////////////////////////////////////////
 
-//#pragma optimize("", off) // JPB WIP BUG
-
 // S T R U C T S ///////////////////////////////////////////////////
+
+PointCloud::PointCloud(const PointCloudStreaming& pcs)
+{
+	// Convert a PointCloudStreaming to a PointCloud rep.
+	Release();
+
+	// Copy points
+	const size_t numPoints = pcs.NumPoints();
+	points.Reserve(numPoints);
+	const float* __restrict ptSrc = pcs.PointStream();
+	for (size_t i = 0; i < numPoints; ++i, ptSrc += 3) {
+		points.emplace_back(ptSrc[0], ptSrc[1], ptSrc[2]);
+	}
+
+	// Copy normals
+	const size_t numNormals = pcs.NormalStream() ? numPoints : 0;
+	normals.Reserve(numNormals);
+	const float* __restrict nrmSrc = pcs.NormalStream();
+	for (size_t i = 0; i < numNormals; ++i, nrmSrc += 3) {
+		normals.emplace_back(nrmSrc[0], nrmSrc[1], nrmSrc[2]);
+	}
+
+	// Copy colors
+	const size_t numColors = pcs.ColorStream() ? numPoints : 0;
+	colors.Reserve(numColors);
+	const uint8_t* __restrict colSrc = pcs.ColorStream();
+	for (size_t i = 0; i < numColors; ++i, colSrc += 3) {
+		colors.emplace_back(colSrc[0], colSrc[1], colSrc[2]);
+	}
+
+	// Point views
+	pointViews.Reserve(numPoints);
+	for (size_t i = 0; i < numPoints; ++i) {
+		const size_t numPointViews = pcs.pointViewsSizes[i];
+		const size_t offset = pcs.pointViewsOffsets[i];
+		const uint32_t* src = pcs.pointViewsMemory.data() + offset;
+		auto& tmp = pointViews.emplace_back();
+		for (size_t j = 0; j < numPointViews; ++j) {
+			tmp.emplace_back(src[j]);
+		}
+#if 0
+		auto& pvArray = pointViews[i];
+		pvArray.Reserve(numPointViews);
+		for (size_t j = 0; j < numPointViews; ++j) {
+			pvArray.emplace_back(src[j]);
+		}
+#endif
+	}
+
+	// Point weights
+	pointWeights.Reserve(numPoints);
+	for (size_t i = 0; i < numPoints; ++i) {
+		const size_t numPointWeights = pcs.pointWeightsSizes[i];
+		const size_t offset = pcs.pointWeightsOffsets[i];
+		const float* src = pcs.pointWeightsMemory.data() + offset;
+		auto& tmp = pointWeights.emplace_back();
+		for (size_t j = 0; j < numPointWeights; ++j) {
+			tmp.emplace_back(src[j]);
+		}
+#if 0
+		pointWeights.emplace_back();
+		auto& pwArray = pointWeights[i];
+		pwArray.Reserve(numPointWeights);
+		for (size_t j = 0; j < numPointWeights; ++j) {
+			pwArray.emplace_back(src[j]);
+		}
+#endif
+	}
+}
 
 void PointCloud::Release()
 {
@@ -802,11 +869,31 @@ bool PointCloudStreaming::Save(const String& fileName, bool bLegacyTypes) const
 
 		for (size_t i = 0, cnt = NumPoints(); i < cnt; ++i) {
 			// export the vertex position, normal and color
-			vertex.p = PointCloud::Point(pPoint[0], pPoint[1], pPoint[2]);
-			vertex.n = PointCloud::Normal(pNormal[0], pNormal[1], pNormal[2]);
+			const float x = pPoint[0];
+			const float y = pPoint[1];
+			const float z = pPoint[2];
+			const float nx = pNormal[0];
+			const float ny = pNormal[1];
+			const float nz = pNormal[2];
+			const uint8_t r = pColor[0];
+			const uint8_t g = pColor[1];
+			const uint8_t b = pColor[2];
+
+			vertex.p.x = x;
+			vertex.p.y = y;
+			vertex.p.z = z;
+			vertex.n.x = nx;
+			vertex.n.y = ny;
+			vertex.n.z = nz;
+			vertex.c.r = r;
+			vertex.c.g = g;
+			vertex.c.b = b;
+
+			//vertex.p = PointCloud::Point(pPoint[0], pPoint[1], pPoint[2]);
+			//vertex.n = PointCloud::Normal(pNormal[0], pNormal[1], pNormal[2]);
 			pPoint += 3;
 			pNormal += 3;
-			vertex.c = PointCloud::Color(pColor[0], pColor[1], pColor[2]);
+			//vertex.c = PointCloud::Color(pColor[0], pColor[1], pColor[2]);
 			pColor += srcColorOffset;
 
 			ply.put_element(&vertex);

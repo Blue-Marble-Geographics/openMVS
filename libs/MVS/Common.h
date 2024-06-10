@@ -68,13 +68,16 @@
 
 #define DPC_FASTER_SAMPLING
 
+// Disabled due to precision problems in sampling.
+#undef DPC_FASTER_SAMPLING_USE_INV_Z
+
 // Reduce the detail calculation accuracy to improve performance?
 #define DPC_FASTER_SCORE_PIXEL_DETAIL
 #define DPC_FASTER_SCORE_PIXEL_DETAIL2
 
 // Use a parallel version of pca_estimate_normals (requires TBB)?
 // JPB WIP OPT Restore when the support for this can be added to the build.
-#undef DPC_FASTER_NORMAL_ESTIMATION
+#define DPC_FASTER_NORMAL_ESTIMATION
 
 // DPC_FASTER_SAMPLING related:
 

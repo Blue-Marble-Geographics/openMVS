@@ -37,8 +37,6 @@
 
 using namespace MVS;
 
-//#pragma optimize("", off) // JPB WIP BUG
-
 // D E F I N E S ///////////////////////////////////////////////////
 
 #define PROJECT_ID "MVS\0" // identifies the project stream
@@ -908,7 +906,7 @@ bool Scene::SelectNeighborViews(uint32_t ID, IndexArr& points, unsigned nMinView
 		const auto* viewStream = pointcloud.ViewsStream(idx);
 		const size_t numViews = pointcloud.ViewsStreamSize(idx);
 
-		ASSERT(views.IsSorted());
+		//ASSERT(views.IsSorted());
 		for (size_t j = 0; j < numViews; ++j) {
 			if (viewStream[j] == ID) {
 				// found

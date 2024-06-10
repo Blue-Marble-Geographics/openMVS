@@ -57,6 +57,7 @@
 #define _CmpEQ(a,b) _mm_cmpeq_ps(a, b)
 #define _CmpGE(a,b) _mm_cmpge_ps(a, b)
 #define _CmpGT(a,b) _mm_cmpgt_ps(a, b)
+#define _CmpLE(a,b) _mm_cmple_ps(a, b)
 #define _CmpLT(a,b) _mm_cmplt_ps(a, b)
 #define _CmpEQI(a,b) _mm_cmpeq_epi32(a, b)
 #define _CmpLTI(a,b) _mm_cmplt_epi32(a, b)

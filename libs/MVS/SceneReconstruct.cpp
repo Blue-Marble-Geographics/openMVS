@@ -232,33 +232,25 @@ struct vert_info_t {
 	#else
 	inline vert_info_t() {}
 	#endif
-	void InsertViews(const PointCloudStreaming& pc, PointCloud::Index idxPoint) {
-		const auto* pViews = pc.ViewsStream(idxPoint);
-		const size_t numViews = pc.ViewsStreamSize(idxPoint);
-		ASSERT(pViews);
-		const auto* pWeights = pc.WeightsStream(idxPoint);
-		ASSERT(pweights == NULL || numViews == pc.WeightsStreamSize(idxPoint));
-		for (size_t i = 0; i < numViews; ++i) {
-			const PointCloud::View viewID(pViews[i]);
-			const PointCloud::Weight weight(pWeights ? pWeights[i] : PointCloud::Weight(1));
+	void InsertViews(const PointCloud& pc, PointCloud::Index idxPoint) {
+		const PointCloud::ViewArr& _views = pc.pointViews[idxPoint];
+		ASSERT(!_views.IsEmpty());
+		const PointCloud::WeightArr* pweights(pc.pointWeights.IsEmpty() ? NULL : pc.pointWeights.Begin()+idxPoint);
+		ASSERT(pweights == NULL || _views.GetSize() == pweights->GetSize());
+		FOREACH(i, _views) {
+			const PointCloud::View viewID(_views[i]);
+			const PointCloud::Weight weight(pweights ? (*pweights)[i] : PointCloud::Weight(1));
 			// insert viewID in increasing order
-			auto it = std::upper_bound(pViews, pViews+numViews, viewID); // (views.FindFirstEqlGreater(viewID));
-			uint32_t idx;
-			if (it != pViews+numViews) {
-				idx = *it;
-			} else {
-				idx =0;
-			}
+			const uint32_t idx(views.FindFirstEqlGreater(viewID));
 			if (idx < views.GetSize() && views[idx] == viewID) {
 				// the new view is already in the array
-				// JPB WIP ASSERT(views.FindFirst(viewID) == idx);
+				ASSERT(views.FindFirst(viewID) == idx);
 				// update point's weight
 				views[idx].weight += weight;
 			} else {
 				// the new view is not in the array,
 				// insert it
-				//views.InsertAt(idx, view_t(viewID, weight));
-
+				views.InsertAt(idx, view_t(viewID, weight));
 				ASSERT(views.IsSorted());
 			}
 		}
@@ -779,6 +771,8 @@ bool Scene::ReconstructMesh(float distInsert, bool bUseFreeSpaceSupport, bool bU
 							float kInf
 )
 {
+	PointCloud pcOriginal = PointCloud(pointcloud);
+
 	using namespace DELAUNAY;
 	ASSERT(!pointcloud.IsEmpty());
 	mesh.Release();
@@ -791,15 +785,13 @@ bool Scene::ReconstructMesh(float distInsert, bool bUseFreeSpaceSupport, bool bU
 	{
 		TD_TIMER_STARTD();
 
-		const size_t numPoints = pointcloud.NumPoints();
-		std::vector<point_t> vertices(numPoints);
-		std::vector<std::ptrdiff_t> indices(numPoints);
+		std::vector<point_t> vertices(pcOriginal.points.GetSize());
+		std::vector<std::ptrdiff_t> indices(pcOriginal.points.GetSize());
 		// fetch points
 		if (bUseOnlyROI && !IsBounded())
 			bUseOnlyROI = false;
-		const float* pPoints = pointcloud.PointStream();
-		for (size_t i = 0; i < numPoints; ++i, pPoints += 3) {
-			const PointCloud::Point& X = (PointCloud::Point&)pPoints;
+		FOREACH(i, pcOriginal.points) {
+			const PointCloud::Point& X(pcOriginal.points[i]);
 			if (bUseOnlyROI && !obb.Intersects(X))
 				continue;
 			vertices[i] = point_t(X.x, X.y, X.z);
@@ -816,9 +808,8 @@ bool Scene::ReconstructMesh(float distInsert, bool bUseFreeSpaceSupport, bool bU
 		int li, lj;
 		std::for_each(indices.cbegin(), indices.cend(), [&](size_t idx) {
 			const point_t& p = vertices[idx];
-			const PointCloud::Point& point = (PointCloud::Point&) pointcloud.PointStream()[idx*3];
-			const auto* pViews = pointcloud.ViewsStream(idx);
-			const size_t numViews = pointcloud.ViewsStreamSize(idx);
+			const PointCloud::Point& point = pcOriginal.points[idx];
+			const PointCloud::ViewArr& views = pcOriginal.pointViews[idx];
 			ASSERT(!views.IsEmpty());
 			if (hint == vertex_handle_t()) {
 				// this is the first point,
@@ -865,9 +856,8 @@ bool Scene::ReconstructMesh(float distInsert, bool bUseFreeSpaceSupport, bool bU
 					ASSERT(nearest == delaunay.nearest_vertex(p, hint->cell()));
 					hint = nearest;
 					// check if point is far enough to all existing points
-					for (size_t i = 0; i < numViews; ++i) {
-						const auto viewID = pViews[i];
-						const Image& imageData = images[viewID];
+					FOREACHPTR(pViewID, views) {
+						const Image& imageData = images[*pViewID];
 						const Point3f pn(imageData.camera.ProjectPointP3(point));
 						const Point3f pe(imageData.camera.ProjectPointP3(CGAL2MVS<float>(nearest->point())));
 						if (!IsDepthSimilar(pn.z, pe.z) || normSq(Point2f(pn)-Point2f(pe)) > distInsertSq) {
@@ -881,11 +871,11 @@ bool Scene::ReconstructMesh(float distInsert, bool bUseFreeSpaceSupport, bool bU
 				}
 			}
 			// update point visibility info
-			hint->info().InsertViews(pointcloud, idx);
+			hint->info().InsertViews(pcOriginal, idx);
 			++progress;
 		});
 		progress.close();
-		pointcloud.Release();
+		pcOriginal.Release();
 		// init cells weights and
 		// loop over all cells and store the finite facet of the infinite cells
 		const size_t numNodes(delaunay.number_of_cells());
