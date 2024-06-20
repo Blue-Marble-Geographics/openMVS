@@ -2831,6 +2831,13 @@ void DepthEstimator::ProcessPixel(IDX idx)
 			normal = nnormal;
 			p = np;
 			scaleRange = scaleRanges[++idxScaleRange];
+			usenp2 = false;
+		} else {
+			if (usenp2) {
+				usenp2 = false;
+			} else {
+				usenp2 = true;
+			}
 		}
 #else
 		if (conf > nconf) {
@@ -2839,13 +2846,6 @@ void DepthEstimator::ProcessPixel(IDX idx)
 			normal = nnormal;
 			p = np;
 			scaleRange = scaleRanges[++idxScaleRange];
-			usenp2 = false;
-		} else {
-			if (usenp2) {
-				usenp2 = false;
-			} else {
-				usenp2 = true;
-			}
 		}
 #endif // DPC_FASTER_RANDOM_ITER_CALC
 	}
