@@ -113,7 +113,7 @@ MDEFVAR_OPTDENSE_float(fNCCThresholdKeep, "NCC Threshold Keep", "Maximum 1-NCC s
 DEFVAR_OPTDENSE_uint32(nEstimationIters, "Estimation Iters", "Number of patch-match iterations", "3")
 DEFVAR_OPTDENSE_uint32(nEstimationGeometricIters, "Estimation Geometric Iters", "Number of geometric consistent patch-match iterations (0 - disabled)", "2")
 MDEFVAR_OPTDENSE_float(fEstimationGeometricWeight, "Estimation Geometric Weight", "pairwise geometric consistency cost weight", "0.1")
-MDEFVAR_OPTDENSE_uint32(nRandomIters, "Random Iters", "Number of iterations for random assignment per pixel", "5") // Testing for experimental branch JPB WIP BUG "6")
+MDEFVAR_OPTDENSE_uint32(nRandomIters, "Random Iters", "Number of iterations for random assignment per pixel", "3") // Testing for experimental branch JPB WIP BUG "6")
 MDEFVAR_OPTDENSE_uint32(nRandomMaxScale, "Random Max Scale", "Maximum number of iterations to skip during random assignment", "2")
 MDEFVAR_OPTDENSE_float(fRandomDepthRatio, "Random Depth Ratio", "Depth range ratio of the current estimate for random plane assignment", "0.003", "0.004")
 MDEFVAR_OPTDENSE_float(fRandomAngle1Range, "Random Angle1 Range", "Angle 1 range for random plane assignment (degrees)", "16.0", "20.0")
@@ -2685,6 +2685,7 @@ void DepthEstimator::ProcessPixel(IDX idx)
 			FastACosS(normal.z) // acos(normal.z);
 		);
 
+		bool usenp2 = false;
 		Normal nnormal;
 		Point2f np, np2;
 		v4sf vSinResult;
@@ -2694,8 +2695,12 @@ void DepthEstimator::ProcessPixel(IDX idx)
 			const Depth ndepth(RandomDepth(rnd, dMinSqr, dMaxSqr));
 
 			// const Normal nnormal(RandomNormal(rnd, viewDir));
-			int baseIndex = (iter&1);
-			if (!baseIndex) {
+			int baseIndex;
+			if (usenp2) {
+				np = np2;
+				baseIndex = 2;
+			} else {
+				// Get the next two iterations of sin/cos pairs.
 				np = Point2f(
 					rnd.randomRange(FD2R(0.f), FD2R(180.f)),
 					rnd.randomRange(FD2R(90.f), FD2R(180.f))
@@ -2707,6 +2712,7 @@ void DepthEstimator::ProcessPixel(IDX idx)
 				);
 
 				sincos_ps(v4sf{ np.x, np.y, np2.x, np2.y }, &vSinResult, &vCosResult);
+				baseIndex = 0;
 			}
 			nnormal = Normal(
 				_AsArray(vCosResult, baseIndex)*_AsArray(vSinResult, baseIndex+1),
@@ -2733,6 +2739,8 @@ void DepthEstimator::ProcessPixel(IDX idx)
 				if (conf < thConfRand)
 					goto RefineIters;
 			}
+
+			usenp2 = !usenp2;
 		}
 		return;
 	}
@@ -2790,6 +2798,7 @@ void DepthEstimator::ProcessPixel(IDX idx)
 				rnd.randomMeanRange(p.y, randomAngle2Range)
 			);
 
+			// Gets sin(np.x, np.y, np2.x, np2.y) and cos(same) simultaneously.
 			sincos_ps(v4sf{ np.x, np.y, np2.x, np2.y }, &vSinResult, &vCosResult);
 
 			baseIndex = 0;
@@ -2833,11 +2842,7 @@ void DepthEstimator::ProcessPixel(IDX idx)
 			scaleRange = scaleRanges[++idxScaleRange];
 			usenp2 = false;
 		} else {
-			if (usenp2) {
-				usenp2 = false;
-			} else {
-				usenp2 = true;
-			}
+			usenp2 = !usenp2;
 		}
 #else
 		if (conf > nconf) {
