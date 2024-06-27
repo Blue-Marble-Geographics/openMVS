@@ -181,6 +181,10 @@ if(Boost_FOUND)
 		# work around this missing library link in vcpkg
 		LIST(APPEND Boost_LIBRARIES zstd)
 	endif()
+	LIST(APPEND OpenMVS_EXTRA_LIBS Boost::program_options)
+	LIST(APPEND OpenMVS_EXTRA_LIBS Boost::iostreams)
+	LIST(APPEND OpenMVS_EXTRA_LIBS Boost::serialization)
+	LIST(APPEND OpenMVS_EXTRA_LIBS Boost::system)
 	SET(_USE_BOOST TRUE)
 endif()
 
@@ -203,6 +207,20 @@ if(OpenCV_FOUND)
 	MESSAGE(STATUS "OpenCV ${OpenCV_VERSION} found (include: ${OpenCV_INCLUDE_DIRS})")
 else()
 	MESSAGE("-- Can't find OpenCV. Please specify OpenCV directory using OpenCV_DIR variable")
+endif()
+
+FIND_PACKAGE(TBB REQUIRED)
+FIND_PACKAGE(CGAL REQUIRED)
+if(CGAL_FOUND)
+	#set(CGAL_DIR "../../cgal-5.5.2")
+	include(CGAL_TBB_support)
+	# include_directories(${CGAL_INCLUDE_DIRS})
+
+	message(STATUS "CGAL_INCLUDE_DIRS=${CGAL_INCLUDE_DIRS}")
+
+	LIST(APPEND OpenMVS_EXTRA_LIBS "CGAL::CGAL;CGAL::TBB_support")
+	# message (STATUS "CGAL_INCLUDE_DIRS=${CGAL_INCLUDE_DIRS}")
+	message (STATUS "OpenMVS_EXTRA_LIBS=${OpenMVS_EXTRA_LIBS}")
 endif()
 
 LIST(REMOVE_DUPLICATES OpenMVS_EXTRA_INCLUDES)
