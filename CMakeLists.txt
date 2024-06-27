@@ -216,6 +216,10 @@ if(CGAL_FOUND)
 	include(CGAL_TBB_support)
 	# include_directories(${CGAL_INCLUDE_DIRS})
 
+	if (EXISTS "${CMAKE_SOURCE_DIR}/cgal-5.5.2")
+		set (CGAL_INCLUDE_DIRS "${CMAKE_SOURCE_DIR}/cgal-5.5.2")
+	endif()
+
 	message(STATUS "CGAL_INCLUDE_DIRS=${CGAL_INCLUDE_DIRS}")
 
 	LIST(APPEND OpenMVS_EXTRA_LIBS "CGAL::CGAL;CGAL::TBB_support")
