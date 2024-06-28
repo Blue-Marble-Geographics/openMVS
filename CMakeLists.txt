@@ -210,20 +210,16 @@ else()
 endif()
 
 FIND_PACKAGE(TBB REQUIRED)
+
+if (EXISTS "${CMAKE_SOURCE_DIR}/cgal-5.5.2")
+	set(CGAL_DIR "${CMAKE_SOURCE_DIR}/cgal-5.5.2" CACHE PATH "")
+endif()
 FIND_PACKAGE(CGAL REQUIRED)
 if(CGAL_FOUND)
-	#set(CGAL_DIR "../../cgal-5.5.2")
-	include(CGAL_TBB_support)
-	# include_directories(${CGAL_INCLUDE_DIRS})
-
-	if (EXISTS "${CMAKE_SOURCE_DIR}/cgal-5.5.2")
-		set(CGAL_DIR "${CMAKE_SOURCE_DIR}/cgal-5.5.2")
+	if (TBB_FOUND)
+		include(CGAL_TBB_support)
+		LIST(APPEND OpenMVS_EXTRA_LIBS "CGAL::TBB_support")
 	endif()
-
-	message(STATUS "CGAL_INCLUDE_DIRS=${CGAL_INCLUDE_DIRS}")
-
-	LIST(APPEND OpenMVS_EXTRA_LIBS "CGAL::CGAL;CGAL::TBB_support")
-	# message (STATUS "CGAL_INCLUDE_DIRS=${CGAL_INCLUDE_DIRS}")
 	message (STATUS "OpenMVS_EXTRA_LIBS=${OpenMVS_EXTRA_LIBS}")
 endif()
 
