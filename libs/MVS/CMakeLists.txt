@@ -1,4 +1,3 @@
-
 # Find required packages
 FIND_PACKAGE(CGAL REQUIRED)
 if(CGAL_FOUND)
