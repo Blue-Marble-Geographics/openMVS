@@ -7,8 +7,7 @@ FILE(GLOB LIBRARY_FILES_H "*.h" "*.inl")
 
 ADD_DEFINITIONS(-D_DATA_PATH="${CMAKE_CURRENT_SOURCE_DIR}/data/")
 
-find_package(TBB CONFIG REQUIRED)
-cxx_executable_with_flags(Tests "Apps" "${cxx_default}" "MVS;${OpenMVS_EXTRA_LIBS};TBB::tbb" ${LIBRARY_FILES_C} ${LIBRARY_FILES_H})
+cxx_executable_with_flags(Tests "Apps" "${cxx_default}" "MVS;${OpenMVS_EXTRA_LIBS}" ${LIBRARY_FILES_C} ${LIBRARY_FILES_H})
 
 # Install
 INSTALL(TARGETS Tests

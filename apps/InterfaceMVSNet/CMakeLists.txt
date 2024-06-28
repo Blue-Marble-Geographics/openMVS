@@ -5,8 +5,7 @@ else()
 endif()
 FILE(GLOB LIBRARY_FILES_H "*.h" "*.inl")
 
-find_package(TBB CONFIG REQUIRED)
-cxx_executable_with_flags(InterfaceMVSNet "Apps" "${cxx_default}" "MVS;${OpenMVS_EXTRA_LIBS};TBB::tbb" ${LIBRARY_FILES_C} ${LIBRARY_FILES_H})
+cxx_executable_with_flags(InterfaceMVSNet "Apps" "${cxx_default}" "MVS;${OpenMVS_EXTRA_LIBS}" ${LIBRARY_FILES_C} ${LIBRARY_FILES_H})
 
 # Install
 INSTALL(TARGETS InterfaceMVSNet
