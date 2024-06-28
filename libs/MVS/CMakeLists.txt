@@ -1,6 +1,5 @@
 
 # Find required packages
-set(CGAL_DIR "../../cgal-5.5.2")
 FIND_PACKAGE(CGAL REQUIRED)
 if(CGAL_FOUND)
 	include_directories(${CGAL_INCLUDE_DIRS})
@@ -8,16 +7,11 @@ if(CGAL_FOUND)
 	link_directories(${CGAL_LIBRARY_DIRS})
 endif()
 
-set(VCG_ROOT "../../vcglib")
 FIND_PACKAGE(VCG REQUIRED)
 if(VCG_FOUND)
 	include_directories(${VCG_INCLUDE_DIRS})
-    	add_definitions(${VCG_DEFINITIONS})
+	add_definitions(${VCG_DEFINITIONS})
 endif()
-
-find_package(TBB REQUIRED)
-include(CGAL_TBB_support) # Includes a module from CGAL
-add_compile_definitions(CGAL_LINKED_WITH_TBB)
 
 set(CERES_LIBS "")
 if(OpenMVS_USE_CERES)
@@ -52,7 +46,8 @@ endif()
 if(_USE_CUDA)
 	set_target_properties(MVS PROPERTIES CUDA_ARCHITECTURES "50;72;75")
 endif()
-TARGET_LINK_LIBRARIES(MVS PRIVATE Common Math IO CGAL::CGAL ${CERES_LIBRARIES} ${CUDA_CUDA_LIBRARY})
+# TODO: CGAL::TBB_support should be controlled by a configuration option
+TARGET_LINK_LIBRARIES(MVS PRIVATE Common Math IO CGAL::CGAL CGAL::TBB_support ${CERES_LIBRARIES} ${CUDA_CUDA_LIBRARY})
 
 # Install
 SET_TARGET_PROPERTIES(MVS PROPERTIES
