@@ -21,6 +21,7 @@
 	"opengl",
     "tbb",
     "tiff",
+	"vcglib",
     "zlib"
   ],
   "features": {
