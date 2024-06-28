@@ -1,24 +1,4 @@
 
-# Find required packages
-set(CGAL_DIR "../../cgal-5.5.2")
-FIND_PACKAGE(CGAL REQUIRED)
-if(CGAL_FOUND)
-	include_directories(${CGAL_INCLUDE_DIRS})
-	add_definitions(${CGAL_DEFINITIONS})
-	link_directories(${CGAL_LIBRARY_DIRS})
-endif()
-
-set(VCG_ROOT "../../vcglib")
-FIND_PACKAGE(VCG REQUIRED)
-if(VCG_FOUND)
-	include_directories(${VCG_INCLUDE_DIRS})
-    	add_definitions(${VCG_DEFINITIONS})
-endif()
-
-find_package(TBB REQUIRED)
-include(CGAL_TBB_support) # Includes a module from CGAL
-add_compile_definitions(CGAL_LINKED_WITH_TBB)
-
 set(CERES_LIBS "")
 if(OpenMVS_USE_CERES)
 	FIND_PACKAGE(Ceres)
