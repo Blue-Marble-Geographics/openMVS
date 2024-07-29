@@ -352,9 +352,9 @@ struct MVS_API DepthData {
 		_Data mWindowShifted;
 		
 		inline void Init(const Camera& cameraRef) {
-			mWindowShifted = _SetN( image.width()-2*nSizeHalfWindow-1, image.height()-2*nSizeHalfWindow-1, 0.f, 0.f);
-			mK02K12 = _SetN(camera.K(0, 2), camera.K(1, 2), 0.f, 0.f);
-			mInvK00K11 = _SetN(1./camera.K(0, 0), 1./camera.K(1, 1), 0.f, 0.f);
+			mWindowShifted = _SetN( (float) (image.width()-2*nSizeHalfWindow-1), (float)(image.height()-2*nSizeHalfWindow-1), 0.f, 0.f);
+			mK02K12 = _SetN((float) camera.K(0, 2), (float) camera.K(1, 2), 0.f, 0.f);
+			mInvK00K11 = _SetN((float) (1./camera.K(0, 0)), (float) (1./camera.K(1, 1)), 0.f, 0.f);
 
 			Hl = camera.K * camera.R * cameraRef.R.t();
 			Hm = camera.K * camera.R * (cameraRef.C - camera.C);
@@ -507,7 +507,6 @@ struct MVS_API DepthEstimator {
 		RB2LT,
 		DIRS
 	};
-//#pragma optimize("", off) // JPB WIP BUG
 
 	typedef TPoint2<uint16_t> MapRef;
 	typedef CLISTDEF0(MapRef) MapRefArr;
@@ -527,7 +526,6 @@ struct MVS_API DepthEstimator {
 	#endif
 #pragma pack(pop)
 
-//#pragma optimize("", off) // JPB WIP BUG
 	#if DENSE_NCC == DENSE_NCC_WEIGHTED
 	typedef WeightedPatchFix<nTexels> Weight;
 	typedef CLISTDEFIDX(Weight,int) WeightMap;
@@ -583,7 +581,7 @@ struct MVS_API DepthEstimator {
 	#endif
 	DepthMap lowResDepthMap;
 
-	const unsigned nIteration; // current PatchMatch iteration
+	//const unsigned nIteration; // current PatchMatch iteration
 	const DepthData::ViewDataArr images; // neighbor images used
 
 	struct ScoreResultsSOA_t
@@ -650,8 +648,8 @@ struct MVS_API DepthEstimator {
 			data(image.image.data),
 			data2(image.imageBig.data),
 			rowByteStride((int) image.imageBig.row_stride()),
-			widthMinus2((image.image.width() - 2)),
-			heightMinus2((image.image.height() - 2))
+			widthMinus2((float) (image.image.width() - 2)),
+			heightMinus2((float) (image.image.height() - 2))
 		{
 			if (image.image.elem_stride() != 4) {
 				throw std::runtime_error("Unsupported");
@@ -672,13 +670,8 @@ struct MVS_API DepthEstimator {
 		uchar* data;
 		uchar* data2;
 		int rowByteStride;
-#if 1 // JPB WIP BUG precision testing
-		double widthMinus2;
-		double heightMinus2;
-#else
 		float widthMinus2;
 		float heightMinus2;
-#endif
 
 		// Optional
 		const uchar* depthMapData;
@@ -715,11 +708,8 @@ struct MVS_API DepthEstimator {
 			float lowResDepth
 		)
 		{
-			mDepth = depth;
 #ifdef DPC_FASTER_SCORE_PIXEL_DETAIL
-			mMat0 = _Set(_AsArray(mat, 0));
-			mMat1 = _Set(_AsArray(mat, 1));
-			mMat2 = _Set(_AsArray(mat, 2));
+			mMatXYZ = _SetN(_AsArray(mat, 0), _AsArray(mat, 1), _AsArray(mat, 2), 0.f);
 #else
 			mMat01 = _mm_set_pd(mat(1), mat(0));
 			mMat0 = _mm_set1_pd(mat(0));
@@ -732,17 +722,15 @@ struct MVS_API DepthEstimator {
 			if (!mLowResDepthMapEmpty) {
 				if (lowResDepth > 0.f) {
 					float tmp = FastAbsS(lowResDepth-depth)/lowResDepth;
-					mvDeltaDepth = _Set(FastMinS(tmp, 0.5f));
+					mDeltaDepth = FastMinS(tmp, 0.5f);
 				}
 			}
 		}
 
-		Depth mDepth;
-		Depth mLowResDepth;
+		std::vector<ImageInfo_t, boost::alignment::aligned_allocator<ImageInfo_t, ALIGN_SIZE>> imageInfo;
+
 #ifdef DPC_FASTER_SCORE_PIXEL_DETAIL
-		_Data mMat0;
-		_Data mMat1;
-		_Data mMat2;
+		_Data mMatXYZ;
 #else
 		__m128d mMat01;
 		__m128d mMat0;
@@ -750,9 +738,7 @@ struct MVS_API DepthEstimator {
 		__m128d mMat2;
 #endif
 		_Data mVScoreFactor;
-		_Data mvDeltaDepth;
 		_Data mDepthMapPt; // w component undefined.
-		mutable bool mLowResDepthMapEmpty;
 
 		// Always set before scoring.
 		const uchar* mAddr;
@@ -779,12 +765,19 @@ struct MVS_API DepthEstimator {
 		_Data mvBasisVZ4;
 		_Data mVLeftColX4;
 		_Data mVLeftColY4;
+#ifdef DPC_FASTER_SAMPLING_USE_INV_Z
+		_Data mInvVLeftColZ4;
+#else
 		_Data mVLeftColZ4;
+#endif
 		_Data mVBotRowX4;
 		_Data mVBotRowY4;
 		_Data mVBotRowZ4;
 
-		std::vector<ImageInfo_t, boost::alignment::aligned_allocator<ImageInfo_t, ALIGN_SIZE>> imageInfo;
+		Depth mLowResDepth;
+		float mDeltaDepth;
+
+		mutable bool mLowResDepthMapEmpty;
 	};
 	ScoreHelper sh;	// Order dependency on images
 
@@ -828,7 +821,7 @@ struct MVS_API DepthEstimator {
 		x0ULPatchCorner0 = _Set(_AsArray(vCornerXY, 0)); // (float)ulx);
 		x0ULPatchCorner1 = _Set(_AsArray(vCornerXY, 1)); // (float)uly);
 #else
-		x0ULPatchCorner = Vec2_t((Calc_t)( ulx ), (Calc_t)( uly ));
+		x0ULPatchCorner = Vec2_t((Calc_t)( _AsArray(vCornerXY, 0) ), (Calc_t)( _AsArray(vCornerXY, 1) ));
 		x0ULPatchCorner0 = _mm_set1_pd(x0ULPatchCorner[0]);
 		x0ULPatchCorner1 = _mm_set1_pd(x0ULPatchCorner[1]);
 #endif
@@ -933,8 +926,8 @@ struct MVS_API DepthEstimator {
 				const float pix6 = image0.image.pix(i6);
 				const float pix7 = image0.image.pix(i7);
 				
-				_Data vPixelTempWeights1 = _SetN(pix0, pix1, pix2, pix3);
-				_Data vPixelTempWeights2 = _SetN(pix4, pix5, pix6, pix7);
+				const _Data vPixelTempWeights1 = _SetN(pix0, pix1, pix2, pix3);
+				const _Data vPixelTempWeights2 = _SetN(pix4, pix5, pix6, pix7);
 				_Data vColor1 = vPixelTempWeights1;
 				_Data vColor2 = vPixelTempWeights2;
 
@@ -950,11 +943,11 @@ struct MVS_API DepthEstimator {
 				_Data vPixelWeights1 = exp_ps(_Add(vColor1, _LoadA(&swSpatials[i])));
 				_Data vPixelWeights2 = exp_ps(_Add(vColor2, _LoadA(&swSpatials[i+GROUP_SIZE])));
 #else
-				_Data vPixelWeights1 = FastExp(_Add(vColor1, _LoadA(&swSpatials[i])));
-				_Data vPixelWeights2 = FastExp(_Add(vColor2, _LoadA(&swSpatials[i+GROUP_SIZE])));
+				const _Data vPixelWeights1 = FastExp(_Add(vColor1, _LoadA(&swSpatials[i])));
+				const _Data vPixelWeights2 = FastExp(_Add(vColor2, _LoadA(&swSpatials[i+GROUP_SIZE])));
 #endif
-				_Data vNormSq01 = _Mul(vPixelWeights1, vPixelTempWeights1);
-				_Data vNormSq02 = _Mul(vPixelWeights2, vPixelTempWeights2);
+				const _Data vNormSq01 = _Mul(vPixelWeights1, vPixelTempWeights1);
+				const _Data vNormSq02 = _Mul(vPixelWeights2, vPixelTempWeights2);
 
 				_StoreA(&w.pixelWeights[i], vPixelWeights1);
 				_StoreA(&w.pixelWeights[i+GROUP_SIZE], vPixelWeights2);
@@ -971,13 +964,13 @@ struct MVS_API DepthEstimator {
 			vNormSqSum41 = _Add(vNormSqSum41, vNormSqSum42);
 
 			// The first is left over.
-			auto pixelTempWeight = firstPixelTempWeight;
-			float color = firstColor - _vFirst(vColCenter);
-			auto tmp = color*color*sigmaColor+firstSpatial;
+			const float pixelTempWeight = firstPixelTempWeight;
+			const float color = firstColor - _vFirst(vColCenter);
+			const float tmp = color*color*sigmaColor+firstSpatial;
 #ifdef MORE_ACCURATE_WEIGHTS
-			auto pixelWeight = _vFirst(exp_ps(_Set(tmp)));
+			const float pixelWeight = _vFirst(exp_ps(_Set(tmp)));
 #else
-			auto pixelWeight = _vFirst(BetterFastExpSse(_Set(tmp)));
+			const float pixelWeight = _vFirst(BetterFastExpSse(_Set(tmp)));
 #endif
 			auto normSq0 = pixelWeight * pixelTempWeight;
 			w.firstPixelWeight = pixelWeight;
@@ -988,7 +981,7 @@ struct MVS_API DepthEstimator {
 			wpi.normSq0 += FastHsumS(vNormSqSum41);
 			sumWeights += FastHsumS(vSumWeights41);
 
-			const float tm(wpi.normSq0/sumWeights);
+			const float tm = wpi.normSq0/sumWeights;
 			wpi.normSq0 = 0;
 
 			i = 0;
@@ -1027,7 +1020,7 @@ struct MVS_API DepthEstimator {
 
 			vNormSq0 = _Add(vNormSq0, vNormSq01);
 
-			const float t(w.firstPixelTempWeight - tm);
+			const float t = w.firstPixelTempWeight - tm;
 			wpi.normSq0 += ( w.firstPixelTempWeight = w.firstPixelWeight * t ) * t;
 		
 			wpi.normSq0 += FastHsumS(vNormSq0);
@@ -1051,8 +1044,8 @@ struct MVS_API DepthEstimator {
 			return false;
 
 		// X0 = image0.camera.TransformPointI2C(Cast<REAL>(x0));
-		float x = (x0.x - image0.camera.K(0, 2))/image0.camera.K(0, 0);
-		float y = (x0.y - image0.camera.K(1, 2))/image0.camera.K(1, 1);
+		float x = ((float) x0.x - (float) image0.camera.K(0, 2))/(float) image0.camera.K(0, 0);
+		float y = ((float) x0.y - (float) image0.camera.K(1, 2))/(float) image0.camera.K(1, 1);
 		float z = 1.f;
 
 		const _DataI vX0Raw = _CastIF(_mm_loadl_pi(vX0, (__m64*) &x0.x)); // x0.x, x0.y, xx, xx
@@ -1085,14 +1078,28 @@ struct MVS_API DepthEstimator {
 
 	bool IsScorable(const DepthData::ViewData& image1);
 	bool IsScorable2(const ImageInfo_t& image1);
-	bool IsScorable3(const ImageInfo_t& image1);
+	bool IsScorable3(const ImageInfo_t& image1) noexcept;
 
 	float ScorePixelImageOrig(ScoreResultsSOA_t& scoreResults,
 		const DepthData::ViewData& image1, Depth depth, const Normal& normal);
 
-	bool ScorePixelImage(const ImageInfo_t& imageInfo);
+	struct SampleInfo
+	{
+		float sum;
+		float sumSq;
+		float num4;
+	};
 
-	float ScorePixel(Depth depth, const Normal4 normal);
+	void GatherSampleInfo(
+		const ImageInfo_t& imageInfo,
+		float& sumResult,
+		float& sumSqResult,
+		float& numResult
+	) const noexcept;
+
+	bool ScorePixelImage(const ImageInfo_t& imageInfo) noexcept;
+
+	float ScorePixel(Depth depth, const Normal4& normal);
 	_Data CalculateScoreFactor(
 		_Data normal,
 		float depth,

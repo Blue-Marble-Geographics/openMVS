@@ -76,11 +76,12 @@ protected:
 	static void* STCALL EstimateDepthMapTmp(cList<DepthEstimator>& estimators);
 	static void* STCALL EndDepthMapTmp(cList<DepthEstimator>& estimators);
 #else
-	static void* STCALL ScoreDepthMapTmp(void*);
 	static void* STCALL EstimateDepthMapTmp(void*);
 #ifdef DPC_EXTENDED_OMP_THREADING2
+	static void* STCALL ScoreDepthMapTmp(cList<DepthEstimator>& estimators);
 	static void* STCALL EndDepthMapTmp(cList<DepthEstimator>& estimators);
 #else
+	static void* STCALL ScoreDepthMapTmp(void*);
 	static void* STCALL EndDepthMapTmp(void*);
 #endif
 #endif

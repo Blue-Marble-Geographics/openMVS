@@ -1380,7 +1380,7 @@ public:
 	inline TPoint3(const EVec& rhs) { operator EVec& () = rhs; }
 	#endif
 	explicit inline TPoint3(const TYPE& _x) : Base(_x,_x,_x) {}
-	inline TPoint3(const TYPE& _x, const TYPE& _y, const TYPE& _z) : Base(_x,_y,_z) {}
+	__forceinline TPoint3(const TYPE& _x, const TYPE& _y, const TYPE& _z) : Base(_x,_y,_z) {}
 	template <typename T> inline TPoint3(const cv::Point_<T>& pt, const T& _z=T(1)) : Base(pt.x,pt.y,_z) {}
 	template <typename T1, typename T2> inline TPoint3(const cv::Point_<T1>& pt, const T2& _z) : Base(pt.x,pt.y,_z) {}
 

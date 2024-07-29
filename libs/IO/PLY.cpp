@@ -1409,7 +1409,7 @@ val        - item value to be written
 double_val - value type
 type       - data type to write out
 ******************************************************************************/
-
+#if 0
 void PLY::write_binary_item(
 	const ValueType& val,
 	int from_type,
@@ -1453,7 +1453,7 @@ void PLY::write_binary_item(
 		abort_ply("error: write_binary_item: bad type = %d", to_type);
 	}
 }
-
+#endif
 
 /******************************************************************************
 Write out an item to a file as ascii characters.
@@ -1503,6 +1503,7 @@ Exit:
 val        - extracted value
 ******************************************************************************/
 
+#if 0
 void PLY::get_stored_item(
 	void *ptr,
 	int type,
@@ -1538,6 +1539,7 @@ void PLY::get_stored_item(
 		abort_ply("error: get_stored_item: bad type = %d", type);
 	}
 }
+#endif
 
 
 /******************************************************************************

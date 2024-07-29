@@ -137,7 +137,7 @@ struct Random : std::mt19937 {
 	template<typename T=result_type>
 	FORCEINLINE typename std::enable_if<std::is_floating_point<T>::value, T>::type random() {
 #ifdef OPENMVS_FASTER_RANDOM
-		return (T)random()*(1.f/(T)max());
+		return (T)random()*(T(1)/(T)max());
 #else
 		return (T)random()/(T)max();
 #endif

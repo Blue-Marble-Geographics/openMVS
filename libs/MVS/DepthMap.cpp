@@ -46,7 +46,6 @@
 
 #include <boost/container/small_vector.hpp>
 
-//#pragma optimize("", off) // JPB WIP BUG
 using namespace MVS;
 
 float firstSpatial;
@@ -113,7 +112,7 @@ MDEFVAR_OPTDENSE_float(fNCCThresholdKeep, "NCC Threshold Keep", "Maximum 1-NCC s
 DEFVAR_OPTDENSE_uint32(nEstimationIters, "Estimation Iters", "Number of patch-match iterations", "3")
 DEFVAR_OPTDENSE_uint32(nEstimationGeometricIters, "Estimation Geometric Iters", "Number of geometric consistent patch-match iterations (0 - disabled)", "2")
 MDEFVAR_OPTDENSE_float(fEstimationGeometricWeight, "Estimation Geometric Weight", "pairwise geometric consistency cost weight", "0.1")
-MDEFVAR_OPTDENSE_uint32(nRandomIters, "Random Iters", "Number of iterations for random assignment per pixel", "5") // Testing for experimental branch JPB WIP BUG "6")
+MDEFVAR_OPTDENSE_uint32(nRandomIters, "Random Iters", "Number of iterations for random assignment per pixel", "6")
 MDEFVAR_OPTDENSE_uint32(nRandomMaxScale, "Random Max Scale", "Maximum number of iterations to skip during random assignment", "2")
 MDEFVAR_OPTDENSE_float(fRandomDepthRatio, "Random Depth Ratio", "Depth range ratio of the current estimate for random plane assignment", "0.003", "0.004")
 MDEFVAR_OPTDENSE_float(fRandomAngle1Range, "Random Angle1 Range", "Angle 1 range for random plane assignment (degrees)", "16.0", "20.0")
@@ -240,6 +239,17 @@ void DepthData::ApplyIgnoreMask(const BitMatrix& mask)
 
 bool DepthData::Save(const String& fileName) const
 {
+#if 1 // Remove extra copy
+	ASSERT(IsValid() && !depthMap.empty() && !confMap.empty());
+		// serialize out the current state
+		IIndexArr IDs(0, images.size());
+		for (const ViewData& image: images)
+			IDs.push_back(image.GetID());
+		const ViewData& image0 = GetView();
+		if (!ExportDepthDataRaw(fileName, image0.pImageData->name, IDs, depthMap.size(), image0.camera.K, image0.camera.R, image0.camera.C, dMin, dMax, depthMap, normalMap, confMap, viewsMap))
+			return false;
+
+#else
 	ASSERT(IsValid() && !depthMap.empty() && !confMap.empty());
 	const String fileNameTmp(fileName+".tmp"); {
 		// serialize out the current state
@@ -255,6 +265,7 @@ bool DepthData::Save(const String& fileName) const
 		File::deleteFile(fileNameTmp);
 		return false;
 	}
+#endif
 	return true;
 }
 bool DepthData::Load(const String& fileName, unsigned flags)
@@ -378,7 +389,7 @@ DepthEstimator::DepthEstimator(
 	depthMap0(_depthData0.depthMap), normalMap0(_depthData0.normalMap), confMap0(_depthData0.confMap),
 	#if DENSE_NCC == DENSE_NCC_WEIGHTED
 	#endif
-	nIteration(nIter),
+	//nIteration(nIter),
 	images(_depthData0.images.begin()+1, _depthData0.images.end()), image0(_depthData0.images[0]),
 	#if DENSE_NCC != DENSE_NCC_WEIGHTED
 	image0Sum(_image0Sum),
@@ -484,18 +495,18 @@ _PI32_CONST(2, 2);
 _PI32_CONST(4, 4);
 _PI32_CONST(0x7f, 0x7f);
 
-_PS_CONST(cephes_SQRTHF, 0.707106781186547524);
-_PS_CONST(cephes_log_p0, 7.0376836292E-2);
-_PS_CONST(cephes_log_p1, -1.1514610310E-1);
-_PS_CONST(cephes_log_p2, 1.1676998740E-1);
-_PS_CONST(cephes_log_p3, -1.2420140846E-1);
-_PS_CONST(cephes_log_p4, +1.4249322787E-1);
-_PS_CONST(cephes_log_p5, -1.6668057665E-1);
-_PS_CONST(cephes_log_p6, +2.0000714765E-1);
-_PS_CONST(cephes_log_p7, -2.4999993993E-1);
-_PS_CONST(cephes_log_p8, +3.3333331174E-1);
-_PS_CONST(cephes_log_q1, -2.12194440e-4);
-_PS_CONST(cephes_log_q2, 0.693359375);
+_PS_CONST(cephes_SQRTHF, (float) 0.707106781186547524);
+_PS_CONST(cephes_log_p0, (float) 7.0376836292E-2);
+_PS_CONST(cephes_log_p1, (float) -1.1514610310E-1);
+_PS_CONST(cephes_log_p2, (float) 1.1676998740E-1);
+_PS_CONST(cephes_log_p3, (float) -1.2420140846E-1);
+_PS_CONST(cephes_log_p4, (float) +1.4249322787E-1);
+_PS_CONST(cephes_log_p5, (float) -1.6668057665E-1);
+_PS_CONST(cephes_log_p6, (float) +2.0000714765E-1);
+_PS_CONST(cephes_log_p7, (float) -2.4999993993E-1);
+_PS_CONST(cephes_log_p8, (float) +3.3333331174E-1);
+_PS_CONST(cephes_log_q1, (float) -2.12194440e-4);
+_PS_CONST(cephes_log_q2, (float) 0.693359375);
 
 #ifndef USE_SSE2
 typedef union xmm_mm_union {
@@ -590,16 +601,16 @@ v4sf log_ps(v4sf x) {
 _PS_CONST(exp_hi, 88.3762626647949f);
 _PS_CONST(exp_lo, -88.3762626647949f);
 
-_PS_CONST(cephes_LOG2EF, 1.44269504088896341);
-_PS_CONST(cephes_exp_C1, 0.693359375);
-_PS_CONST(cephes_exp_C2, -2.12194440e-4);
+_PS_CONST(cephes_LOG2EF, (float) 1.44269504088896341);
+_PS_CONST(cephes_exp_C1, (float) 0.693359375);
+_PS_CONST(cephes_exp_C2, (float) -2.12194440e-4);
 
-_PS_CONST(cephes_exp_p0, 1.9875691500E-4);
-_PS_CONST(cephes_exp_p1, 1.3981999507E-3);
-_PS_CONST(cephes_exp_p2, 8.3334519073E-3);
-_PS_CONST(cephes_exp_p3, 4.1665795894E-2);
-_PS_CONST(cephes_exp_p4, 1.6666665459E-1);
-_PS_CONST(cephes_exp_p5, 5.0000001201E-1);
+_PS_CONST(cephes_exp_p0, (float) 1.9875691500E-4);
+_PS_CONST(cephes_exp_p1, (float) 1.3981999507E-3);
+_PS_CONST(cephes_exp_p2, (float) 8.3334519073E-3);
+_PS_CONST(cephes_exp_p3, (float) 4.1665795894E-2);
+_PS_CONST(cephes_exp_p4, (float) 1.6666665459E-1);
+_PS_CONST(cephes_exp_p5, (float) 5.0000001201E-1);
 
 v4sf exp_ps(v4sf x) {
 	v4sf tmp = _mm_setzero_ps(), fx;
@@ -652,16 +663,16 @@ v4sf exp_ps(v4sf x) {
 	return y;
 }
 
-_PS_CONST(minus_cephes_DP1, -0.78515625);
-_PS_CONST(minus_cephes_DP2, -2.4187564849853515625e-4);
-_PS_CONST(minus_cephes_DP3, -3.77489497744594108e-8);
-_PS_CONST(sincof_p0, -1.9515295891E-4);
-_PS_CONST(sincof_p1, 8.3321608736E-3);
-_PS_CONST(sincof_p2, -1.6666654611E-1);
-_PS_CONST(coscof_p0, 2.443315711809948E-005);
-_PS_CONST(coscof_p1, -1.388731625493765E-003);
-_PS_CONST(coscof_p2, 4.166664568298827E-002);
-_PS_CONST(cephes_FOPI, 1.27323954473516); // 4 / M_PI
+_PS_CONST(minus_cephes_DP1, (float) -0.78515625);
+_PS_CONST(minus_cephes_DP2, (float)-2.4187564849853515625e-4);
+_PS_CONST(minus_cephes_DP3, (float)-3.77489497744594108e-8);
+_PS_CONST(sincof_p0, (float)-1.9515295891E-4);
+_PS_CONST(sincof_p1, (float)8.3321608736E-3);
+_PS_CONST(sincof_p2,(float) -1.6666654611E-1);
+_PS_CONST(coscof_p0, (float)2.443315711809948E-005);
+_PS_CONST(coscof_p1, (float)-1.388731625493765E-003);
+_PS_CONST(coscof_p2, (float)4.166664568298827E-002);
+_PS_CONST(cephes_FOPI, (float)1.27323954473516); // 4 / M_PI
 
 
 /* evaluation of 4 sines at onces, using only SSE1+MMX intrinsics so
@@ -945,248 +956,29 @@ void sincos_ps(v4sf x, v4sf* s, v4sf* c) {
 	*c = _mm_xor_ps(xmm2, sign_bit_cos);
 }
 
-#if 0
-static  __forceinline _Data RefExp(_Data vX)
-{
-	return exp_ps(vX); // _SetN(DENSE_EXP(_AsArray(vX, 0)), DENSE_EXP(_AsArray(vX, 1)), DENSE_EXP(_AsArray(vX, 2)), DENSE_EXP(_AsArray(vX, 3)));
-}
-#endif
-
-#define _MM_TRANSPOSE2_PD(row0, row1) {                 \
-  __m128d _tmp = (row0);                                \
-  row0   = _mm_shuffle_pd((row0), (row1), 0x0);         \
-  row1   = _mm_shuffle_pd(_tmp, (row1), 0x3);           \
-}
-
-#define _DataD __m128d
-#define _LoadD _mm_load_pd
-#define _AddD _mm_add_pd
-#define _MulD _mm_mul_pd
-#define _SetD _mm_set1_pd
-#define _SetDN(a,b) _mm_set_pd((b),(a))
-#define _AsArrayD(name, i) (name.m128d_f64[i])
-
-#if 0 // JPB WIP BUG Precision testing
-bool DepthEstimator::IsScorable2(
-	const ImageInfo_t& imageInfo
-)
-{
-	const auto& origImage = imageInfo.image;
-
-	// Half the operations (16 vs. 32).
-	const _DataD ciRhs = _MulD(origImage.vHm0Hm2, sh.mMat2);
-	const _DataD ci = _AddD(origImage.vHl02_22, ciRhs);
-
-	const _DataD agRhs = _MulD(origImage.vHm0Hm2, sh.mMat0);
-	const _DataD ag = _AddD(origImage.vHl00_20, agRhs);
-	const _DataD vh00_h02 = _MulD(ag, origImage.vHr00_00);
-
-	const _DataD bhRhs = _MulD(origImage.vHm0Hm2, sh.mMat1);
-	const _DataD bh = _AddD(origImage.vHl01_21, bhRhs);
-	const _DataD vh10_h12 = _MulD(bh, origImage.vHr11_11);
-
-	const _DataD tmp = _MulD(ag, origImage.vHr02_02); // k
-	const _DataD tmp2 = _MulD(bh, origImage.vHr12_12); // m
-	const _DataD vh20_h22 = _AddD(_AddD(tmp, tmp2), ci);
-
-	const _DataD vXZ = _AddD(_AddD( _MulD(vh00_h02, x0ULPatchCorner0), _MulD(vh10_h12, x0ULPatchCorner1)), vh20_h22);
-
-	// JPB WIP OPT Can we vectorize this to create x,y,z for several pixels?
-	// It would make the clipping faster.
-	// Even up to here consumes nearly 10% of the time.
-
-	// THIS IS ALL WRONG
-	// Is the point clipped horizontally?
-	// x < z || x/c > z
-	// z >= x || x/c > z
-	// given x | z
-#if 0
-	// THIS IS WRONG
-	_DataD vZX = _mm_shuffle_pd(vXZ, vXZ, 1);              // x | z
-	_DataD vZX2 = _MulD(vZX, imageInfo.oneInvWidthMinus2); // z | x/c
-	
-	_DataD cmp = _mm_cmpge_pd(vZX2, vXZ); // z >= x | x/c >= z
-	if (_mm_movemask_pd(cmp)) {
-		return false;
-	}
-#else
-	if ((_AsArrayD(vXZ, 0) < 1. * _AsArrayD(vXZ,1)) | ((_AsArrayD(vXZ, 0) > imageInfo.widthMinus2*(_AsArrayD(vXZ, 1))))) { // Binary | intentional
-		return false;
-	}
-#endif
-
-	const _DataD deRhs = _MulD(origImage.vHm1, sh.mMat01);
-	_DataD de = _AddD(origImage.vHl10_11, deRhs);
-
-	const Calc_t f = origImage.Hl(1,2) + origImage.Hm(1) * _AsArrayD(sh.mMat2,0);
-
-	_DataD vh01_h11 = _MulD(de, origImage.vHr00_11);
-	const Calc_t h21 = (Calc_t) (_AsArrayD(de, 0) * origImage.Hr(0,2) + _AsArrayD(de, 1) * origImage.Hr(1,2) + f);
-	const Calc_t y = _AsArrayD(vh01_h11,0) * x0ULPatchCorner[0] + _AsArrayD(vh01_h11,1) * x0ULPatchCorner[1] + h21;
-
-	// Is the point clipped vertically?
-	if ((y < 1. * _AsArrayD(vXZ, 1)) | (y > imageInfo.heightMinus2*_AsArrayD(vXZ, 1))) { // Binary | intentional
-		return false;
-	}
-
-	sh.mVX = _SetN((float) _AsArrayD(vXZ, 0), (float) y, (float) _AsArrayD(vXZ,1), 0.f);
-	const _Data vImageWidthWithBorder = _Set((float) imageInfo.widthMinus2);
-	const _Data vImageHeightWithBorder = _Set((float) imageInfo.heightMinus2);
-
-	_Data vh00_h02AsFloat = _mm_cvtpd_ps(vh00_h02);
-	_Data vh01_h11AsFloat = _mm_cvtpd_ps(vh01_h11);
-	_Data vh10_h12AsFloat = _mm_cvtpd_ps(vh10_h12);
-	_Data vh20_h22AsFloat = _mm_cvtpd_ps(vh20_h22);
-
-	const _Data vHTRow0 = _SetN(_AsArray(vh00_h02AsFloat,0), _AsArray(vh01_h11AsFloat,0), _AsArray(vh00_h02AsFloat, 1), 0.f);
-	const _Data vHTRow1 = _SetN(_AsArray(vh10_h12AsFloat,0), _AsArray(vh01_h11AsFloat,1), _AsArray(vh10_h12AsFloat, 1), 0.f);
-		//const _Data vHTRow0 = _SetN(_AsArray(vh00_h10AsFloat,0), _AsArray(vh01_h11AsFloat,0), _AsArray(vh02_h12AsFloat,0), 0.f);
-	//const _Data vHTRow1 = _SetN(_AsArray(vh00_h10AsFloat,1), _AsArray(vh01_h11AsFloat,1), _AsArray(vh02_h12AsFloat,1), 0.f);
-
-	// Prepare H for rasterizing.
-	// Determine H's horizontal and vertical basis vectors.
-	//const _Data vHTRow0 = _SetN(_AsArray(vh00_h10AsFloat,0), _AsArray(vh01_h11AsFloat,0), _AsArray(vh02_h12AsFloat,0), 0.f);
-	//const _Data vHTRow1 = _SetN(_AsArray(vh00_h10AsFloat,1), _AsArray(vh01_h11AsFloat,1), _AsArray(vh02_h12AsFloat,1), 0.f);
-	constexpr _Data vSizeStep = {(float) DepthEstimator::nSizeStep, (float)DepthEstimator::nSizeStep, (float)DepthEstimator::nSizeStep, (float)DepthEstimator::nSizeStep};
-	const _Data vBasisH = _Mul(vHTRow0, vSizeStep);
-	const _Data vBasisV = _Mul(vHTRow1, vSizeStep);
-	// Epsilon is needed as a+a+a+a isn't necessarily equal to 4*a
-	constexpr _Data vFourEpsilon = {4.f + FLT_EPSILON, 4.f + FLT_EPSILON, 4.f + FLT_EPSILON, 0.f};
-	const _Data vBasisH4 = _Mul(vBasisH, vFourEpsilon);
-	const _Data vBasisV4 = _Mul(vBasisV, vFourEpsilon);
-
-	// vX is the projected coordinate of the upper-left portion of the patch;
-	// it is guaranteed within the view boundary.
-	// Determine the other three corners (vUR, vLL, vLR)
-	_Data vUR = _Add(sh.mVX, vBasisH4);
-	_Data vLL = _Add(sh.mVX, vBasisV4);
-	_Data vLR = _Add(vUR, vBasisV4);
-	_Data vMustBeZero = _SetZero();
-
-	// Use transpose to separate the x, y, and z components.
-	// The last register must be 0, so that the corner "w"
-	// components become zero.  This is necessary to assist
-	// the compares below.
-	_MM_TRANSPOSE3_PS(vUR, vLL, vLR, vMustBeZero);
-
-	_Data vCornersX = vUR;
-	_Data vCornersY = vLL;
-	_Data vCornersZ = vLR;
-	_Data vCornersWidthZ = _Mul(vCornersZ, vImageWidthWithBorder);
-	_Data vCornersHeightZ = _Mul(vCornersZ, vImageHeightWithBorder);
-
-	// Cmp leaves 1's if true, 0 otherwise.
-	const _Data vLtX = _CmpLT(vCornersX, vCornersZ);
-	const _Data vLtY = _CmpLT(vCornersY, vCornersZ);
-	const _Data vGtX = _CmpGT(vCornersX, vCornersWidthZ);
-	const _Data vGtY = _CmpGT(vCornersY, vCornersHeightZ);
-
-	// Reject the patch if any of these corners are outside the view boundary.
-	// JPB WIP BUG This does not identify patches which completely cover the view boundary.
-	const _Data vCmpResult = _Or(_Or(vLtX, vLtY), _Or(vGtX, vGtY));
-
-	bool scorable = _mm_movemask_ps(vCmpResult) == 0; //AllZerosI(_CastIF(vCmpResult));
-	if (scorable) {
-#if 1 // JPB WIP BUG Precision
-		_Data vVXs = _Splat(sh.mVX, 0);
-		_Data vVYs = _Splat(sh.mVX, 1);
-		_Data vVZs = _Splat(sh.mVX, 2);
-
-		_Data vProj = _Div(sh.mVX, vVZs);
-		const _Data vVBasisHX = _Splat(vBasisH, 0);
-		const _Data vVBasisHY = _Splat(vBasisH, 1);
-		const _Data vVBasisHZ = _Splat(vBasisH, 2);
-
-		_DataI vProjI = _ConvertIF(vProj);
-		constexpr _Data vDeltaFactor { 1.f, 2.f, 3.f, 4.f };
-		const _Data vVBasisHX4 = _Mul(vVBasisHX, vDeltaFactor);
-		const _Data vVBasisHY4 = _Mul(vVBasisHY, vDeltaFactor);
-		const _Data vVBasisHZ4 = _Mul(vVBasisHZ, vDeltaFactor);
-
-		_Data vProjF = _ConvertFI(vProjI);
-		sh.mVTopRowX4 = _Add(vVXs, vVBasisHX4);
-		sh.mVTopRowY4 = _Add(vVYs, vVBasisHY4);
-		sh.mVTopRowZ4 = _Add(vVZs, vVBasisHZ4);
-
-		const _Data vFracXY = _Sub(vProj, vProjF); // xf yf xx xx
-		sh.mvBasisVX = _Splat(vBasisV, 0);
-		sh.mvBasisVY = _Splat(vBasisV, 1);
-		sh.mvBasisVZ = _Splat(vBasisV, 2);
-		const _Data vFracYX = _mm_shuffle_ps(vFracXY, vFracXY, _MM_SHUFFLE(0, 0, 0, 1)); // yf xf xx xx
-		const _Data vFracXY_YX = _Mul(vFracXY, vFracYX);
-
-		const uchar*  pSamples =
-			imageInfo.data2 + _AsArrayI(vProjI, 1) * imageInfo.rowByteStride
-			+ _AsArrayI(vProjI, 0) * 16;
-		sh.mvBasisVX4 = _Mul(sh.mvBasisVX, vDeltaFactor);
-		sh.mvBasisVY4 = _Mul(sh.mvBasisVY, vDeltaFactor);
-		sh.mvBasisVZ4 = _Mul(sh.mvBasisVZ, vDeltaFactor);
-
-		_mm_prefetch((char*) pSamples, _MM_HINT_T1);
-
-		sh.mAddr = pSamples;
-		constexpr _Data vOne { 1.f, 1.f, 1.f, 1.f };
-
-		_Data vInterleaved = _UnpackLow(vOne, vFracXY);
-		_Data vInterleaved2 = _UnpackLow(vFracXY, vFracXY_YX);
-		//	(1.f, xFrac, yFrac, xFrac* yFrac);
-		sh.mFirst = _mm_shuffle_ps(vInterleaved, vInterleaved2, _MM_SHUFFLE(3, 2, 1, 0));
-
-		sh.mVLeftColX4 = _Add(vVXs, sh.mvBasisVX4);
-		sh.mVLeftColY4 = _Add(vVYs, sh.mvBasisVY4);
-		sh.mVLeftColZ4 = _Add(vVZs, sh.mvBasisVZ4);
-
-#else
-		constexpr _Data deltaFactor = {1.f, 2.f, 3.f, 4.f};
-		const _Data vVBasisHX = _Splat(vBasisH, 0);
-		const _Data vVBasisHY = _Splat(vBasisH, 1);
-		const _Data vVBasisHZ = _Splat(vBasisH, 2);
-
-		const _Data vVBasisHX4 = _Mul(vVBasisHX, deltaFactor);
-		const _Data vVBasisHY4 = _Mul(vVBasisHY, deltaFactor);
-		const _Data vVBasisHZ4 = _Mul(vVBasisHZ, deltaFactor);
-
-		sh.mVBasisHX4 = vVBasisHX4;
-		sh.mVBasisHY4 = vVBasisHY4;
-		sh.mVBasisHZ4 = vVBasisHZ4;
-
-		const _Data vVBasisVX = _Splat(vBasisV, 0);
-		const _Data vVBasisVY = _Splat(vBasisV, 1);
-		const _Data vVBasisVZ = _Splat(vBasisV, 2);
-
-		const _Data vVBasisVX4 = _Mul(vVBasisVX, deltaFactor);
-		const _Data vVBasisVY4 = _Mul(vVBasisVY, deltaFactor);
-		const _Data vVBasisVZ4 = _Mul(vVBasisVZ, deltaFactor);
-
-		sh.mVBasisH = vBasisH;
-		sh.mVBasisV = vBasisV;
-
-		sh.mVBasisVX4 = vVBasisVX4;
-		sh.mVBasisVY4 = vVBasisVY4;
-		sh.mVBasisVZ4 = vVBasisVZ4;
-#endif
-	}
-
-	return scorable;
-}
-#endif
-
 #ifdef DPC_FASTER_SAMPLING
-bool DepthEstimator::IsScorable3(
+
+constexpr _DataI vOneThree{ -1,-1,-1,-1, 0x00,0x00,0x00,0x00, -1,-1,-1,-1, 0x00,0x00,0x00,0x00 };
+
+bool __declspec(safebuffers) DepthEstimator::IsScorable3(
 	const ImageInfo_t& imageInfo
-)
+) noexcept
 {
 	// 	const Calc_t a = image1.Hl(0,0) + image1.Hm(0) * _AsArrayD(sh.mMat0, 0);
 	// const Calc_t j = image1.Hr(0, 0);
 	const auto& origImage = imageInfo.image;
 
+	const _Data mat0 = _Set(_AsArray(sh.mMatXYZ, 0));
+	const _Data mat1 = _Set(_AsArray(sh.mMatXYZ, 1));
+	const _Data mat2 = _Set(_AsArray(sh.mMatXYZ, 2));
+
 	_Data adg = origImage.mHm0Hm1Hm2;
 	_Data beh = origImage.mHm0Hm1Hm2;
 	_Data cfi = origImage.mHm0Hm1Hm2;
 
-	adg = _Mul(adg, sh.mMat0);
-	beh = _Mul(beh, sh.mMat1);
-	cfi = _Mul(cfi, sh.mMat2);
+	adg = _Mul(adg, mat0);
+	beh = _Mul(beh, mat1);
+	cfi = _Mul(cfi, mat2);
 
 	adg = _Add(adg, origImage.mHl00Hl10Hl20);
 	beh = _Add(beh, origImage.mHl01Hl11Hl21);
@@ -1257,22 +1049,22 @@ bool DepthEstimator::IsScorable3(
 	bool scorable = AllZerosI(_CastIF(vCmpResult));
 #endif
 	if (scorable) {
-		_Data vVXs = _Splat(sh.mVX, 0);
-		_Data vVYs = _Splat(sh.mVX, 1);
-		_Data vVZs = _Splat(sh.mVX, 2);
+		const _Data vVXs = _Splat(sh.mVX, 0);
+		const _Data vVYs = _Splat(sh.mVX, 1);
+		const _Data vVZs = _Splat(sh.mVX, 2);
 
-		_Data vProj = _Div(sh.mVX, vVZs);
+		const _Data vProj = _Div(sh.mVX, vVZs);
 		const _Data vVBasisHX = _Splat(vBasisH, 0);
 		const _Data vVBasisHY = _Splat(vBasisH, 1);
 		const _Data vVBasisHZ = _Splat(vBasisH, 2);
 
-		_DataI vProjI = _ConvertIF(vProj);
+		const _DataI vProjI = _ConvertIF(vProj);
 		constexpr _Data vDeltaFactor { 1.f, 2.f, 3.f, 4.f };
 		const _Data vVBasisHX4 = _Mul(vVBasisHX, vDeltaFactor);
 		const _Data vVBasisHY4 = _Mul(vVBasisHY, vDeltaFactor);
 		const _Data vVBasisHZ4 = _Mul(vVBasisHZ, vDeltaFactor);
 
-		_Data vProjF = _ConvertFI(vProjI);
+		const _Data vProjF = _ConvertFI(vProjI);
 		sh.mVTopRowX4 = _Add(vVXs, vVBasisHX4);
 		sh.mVTopRowY4 = _Add(vVYs, vVBasisHY4);
 		sh.mVTopRowZ4 = _Add(vVZs, vVBasisHZ4);
@@ -1291,8 +1083,6 @@ bool DepthEstimator::IsScorable3(
 		sh.mvBasisVY4 = _Mul(sh.mvBasisVY, vDeltaFactor);
 		sh.mvBasisVZ4 = _Mul(sh.mvBasisVZ, vDeltaFactor);
 
-		_mm_prefetch((char*) pSamples, _MM_HINT_T1);
-
 		sh.mAddr = pSamples;
 		constexpr _Data vOne { 1.f, 1.f, 1.f, 1.f };
 
@@ -1309,44 +1099,61 @@ bool DepthEstimator::IsScorable3(
 	return scorable;
 }
 
-struct SampleInfo
-{
-	_Data vSum4;
-	_Data vSumSq4;
-	_Data vNum4;
-};
-
 enum eSPIResult { eNoDepthMap = 1, eMissedDepthMap = 2, eHitDepthMap = 3 };
 
-SampleInfo GatherSampleInfo(
+void __declspec(safebuffers) DepthEstimator::GatherSampleInfo(
 	const DepthEstimator::ImageInfo_t& imageInfo,
-	const DepthEstimator::Weight& w,
-	const DepthEstimator::ScoreHelper& sh
-)
+	float& sumResult,
+	float& sumSqResult,
+	float& numResult
+) const noexcept
 {
-	// center a patch of given size on the segment and fetch the pixel values in the target image
+	// Center a patch of given size on the segment and fetch the pixel values in the target image
+	// A variety of cases are culled for now.
+	// Hard-coded for nTexels == 25
 
-// The "4" variants will be used to maintain sums/nums for
-// four samples at a time.
-	_Data vSum4 { _SetZero() };
-	//_Data vSum4Next = _SetZero();
-	_Data vNum4;
-#if DENSE_NCC != DENSE_NCC_DEFAULT
-	_Data vSumSq4 { _SetZero() };
-	//_Data vSumSq4Next = _SetZero();
-#endif
+	//
+	// 0  5  6  7  8
+	// 1  9 10 11 12
+	// 2 13 14 15 16
+	// 3 17 18 19 20
+	// 4 21 22 23 24
+	//
+
+	// A variety of strategies have been attempted to improve the performance of this work.
+	// These have not shown a significant benefit:
+	// 1) Fetching samples by streaming (avoiding the cache), e.g., vSampleUL = _CastFI( _mm_stream_load_si128((_DataI*) pSampleUL));
+	// 2) Interpolating 1/z as opposed to simply dividing per-pixel.
+	// 3) Performing the address arithmetic (pSampleUL calculation) in floating-point arithmetic (a variety of different ways
+	//    are possible).  Even if successful this may have trouble with large images.
+	// 4) Performing the address arithmetic in SIMD integer calculations is slightly slower even though it clearly
+	//    does less work.
+	// 5) Transposing (_MM_TRANSPOSE4_PS) the fractional coordinates instead of the samples.
+	// 6) Unfolding the primary loop of 5 sets of 4 rows.
+	// 7) Combining the left-column and primary loop into a single loop.
+	// 8) Processing the 5 sets of 4 rows in "twos" in order to potentially reduce instruction latency.
+
+	// These strategies have shown benefit, but introduce problems:
+	// 1) Using a lower-precision divide (__mm_rcp_ps).  Nearly works, but very rarely generates an out-of-bounds coordinate due
+	//    to precision problems.  This will crash the application.
+	// 2) Using AVX/AVX2 to process x and y simultaneously in the primary loop.  Benefit is modest on first attempt (<5%), but
+	//    currently requires runtime identification and other support.
+
+	// What worked:
+	// 1) Using SSE2.
+	// 2) Reordering the weights and tempWeights to retrieve them in scanning order.
+	// 3) Pre-computing the address arithmetic for x (vPtxAsIntx16).
+	// 4) Using 4x the memory per image to store the samples in a form more friendly to the bilinear-sampling algorithm processing.
+	// 5) Using _mm_cvttps_epi32 to truncate towards zero on values that are guaranteed here to be positive.
+	// 6) Working on sets of 4 sums, nums, and sums2 and horizontally adding these at the end.
+	// 7) Removing all unpredictable branching.
+	// 8) Returning the results passed in parameters is faster than alternatives -say as a direct return value (struct).
+	// 9) Oddly, moving the divides in the 5x4 sampling loop to the end of the loop speeds up processing several percent.
+	//    By doing this, it actually issues one extra pair of unused divides and is still faster.
 
 	const size_t rowByteStride = imageInfo.rowByteStride;
 
-	// JPB WIP BUG Hardcoded for nTexels == 25
-	//ASSERT(25 == nTexels);
-
-	// JPB WIP TODO: Change scan to work by group.
-
-	// Handle pixel "0", the ul corner, first:
-
-	//float invZ = 1.f / _AsArray(sh.mVX, 2);
-
+	// Handle the upper-left sample "0"
 #ifdef USE_NN
 		const float sample = *(float*)pSamples;
 		const float weight = w.pixelWeights[0];
@@ -1358,199 +1165,70 @@ SampleInfo GatherSampleInfo(
 		vSumSq4 = _And(_SetFirstUnsafe(weightedSample*sample), _CastFI(vMask1));
 		vNum4 = _And(_SetFirstUnsafe(tempWeightedSample), _CastFI(vMask1));
 #else
+	const Weight& w = pWeightMap;
+
 	const uchar* pSamples = sh.mAddr;
-	_Data sample = _Load((float*)pSamples);
+	_Data sample = _LoadA((float*) pSamples);
+
 	_Data vPartsFirstSample =_Mul(sample, sh.mFirst);
 		// However, vSumSq4 needs the sum of the samples to proceed, e.g.
 		// We have: s0 s1 s2 s3
 		// and we need (s0 + s1 + s2 + s3)*(s0 + s1 + s2 + s3)*pw[0]
 		const float sum = FastHsumS(vPartsFirstSample);
-		const _Data vWeightedSum = _Mul(vPartsFirstSample, _Set(w.firstPixelWeight));
-		const _Data vTempWeightedSum = _Mul(vPartsFirstSample, _Set(w.firstPixelTempWeight));
+	_Data vSum4 = _Mul(vPartsFirstSample, _Set(w.firstPixelWeight));
+	_Data vNum4 = _Mul(vPartsFirstSample, _Set(w.firstPixelTempWeight));
 		const float sumSq = sum*sum;
 
-		// Not faster to save these and apply them later.
-		vSum4 = vWeightedSum;
-		vNum4 = vTempWeightedSum;
-		vSumSq4 = _mm_set_ss(sumSq*w.firstPixelWeight);
+	// The "4" variants will be used to maintain sums/nums for
+	// four samples at a time.
+	_Data vSumSq4 = _mm_set_ss(sumSq*w.firstPixelWeight);
 #endif
 
-#if 0
-	// JPB WIP OPT Not fully AVX compatible (GROUP_SIZE must be 4).
-	// DENSE_NCC == DENSE_NCC_WEIGHTED
+	// Handle the 4 left-column samples "1", "2", "3" and "4".
 
-	// Do remainder of leftmost column, pixels "5", "10, "15" and "20".
-	// Vectorized to process the four pixels.
-	{
-		_Data vX1X2X3X4 = sh.mVLeftColX4;
-		_Data vY1Y2Y3Y4 = sh.mVLeftColY4;
-		_Data vZ1Z2Z3Z4 = sh.mVLeftColZ4;
+	_Data vPtx = _Div(sh.mVLeftColX4, sh.mVLeftColZ4);
+	_Data vPty = _Div(sh.mVLeftColY4, sh.mVLeftColZ4);
 
-		// Requires accuracy.
-		const _Data vPtx = _Div(vX1X2X3X4, vZ1Z2Z3Z4);
-		const _Data vPty = _Div(vY1Y2Y3Y4, vZ1Z2Z3Z4);
+	_DataI vPtxAsInt = _TruncateIF(vPtx);
+	_DataI vPtyAsInt = _TruncateIF(vPty);
+	_DataI vPtxAsIntx16 = _ShiftLI(vPtxAsInt, 4);
 
-		const _DataI vPtxAsInt = _TruncateIF(vPtx);
-		const _DataI vPtyAsInt = _TruncateIF(vPty);
-
-#if 1 // JPB WIP BUG
-		const uchar* __restrict pSample0 =
-			imageInfo.data2 + _AsArrayI(vPtyAsInt, 0) * rowByteStride
-			+ _AsArrayI(vPtxAsInt, 0) * 4 * 4;
-		const uchar* __restrict pSample1 =
-			imageInfo.data2 + _AsArrayI(vPtyAsInt, 1) * rowByteStride
-			+ _AsArrayI(vPtxAsInt, 1) * 4 * 4;
-		const uchar* __restrict pSample2 =
-			imageInfo.data2 + _AsArrayI(vPtyAsInt, 2) * rowByteStride
-			+ _AsArrayI(vPtxAsInt, 2) * 4 * 4;
-		const uchar* __restrict pSample3 =
-			imageInfo.data2 + _AsArrayI(vPtyAsInt, 3) * rowByteStride
-			+ _AsArrayI(vPtxAsInt, 3) * 4 * 4;
-#else
-		const uchar* __restrict pSample0 =
-			imageInfo.data + _AsArrayI(vPtyAsInt, 0) * rowByteStride
-			+ _AsArrayI(vPtxAsInt, 0) * 4;
-		const uchar* __restrict pSample1 =
-			imageInfo.data + _AsArrayI(vPtyAsInt, 1) * rowByteStride
-			+ _AsArrayI(vPtxAsInt, 1) * 4;
-		const uchar* __restrict pSample2 =
-			imageInfo.data + _AsArrayI(vPtyAsInt, 2) * rowByteStride
-			+ _AsArrayI(vPtxAsInt, 2) * 4;
-		const uchar* __restrict pSample3 =
-			imageInfo.data + _AsArrayI(vPtyAsInt, 3) * rowByteStride
-			+ _AsArrayI(vPtxAsInt, 3) * 4;
-#endif
-
-		// Okay on rounding as all values are guaranteed positive.
-		const _Data vFracX1X2X3X4 = _Sub(vPtx, _ConvertFI(vPtxAsInt)); // pt(i).x - (int) pt(i).x
-		const _Data vFracY1Y2Y3Y4 = _Sub(vPty, _ConvertFI(vPtyAsInt)); // pt(i).y - (int) pt(i).y
-
-		_Data vULSamples = _Load((float*) pSample0);
-		_Data vURSamples = _Load((float*)pSample1);
-		_Data vLLSamples = _Load((float*)pSample2);
-		_Data vLRSamples = _Load((float*)pSample3);
-
-		_MM_TRANSPOSE4_PS(vULSamples, vURSamples, vLLSamples, vLRSamples);
-
-		const _Data vFracXY = _Mul(vFracX1X2X3X4, vFracY1Y2Y3Y4);
-		const _Data va00 = vULSamples;
-		const _Data va10 = _Mul(vURSamples, vFracX1X2X3X4);
-		const _Data va01 = _Mul(vLLSamples, vFracY1Y2Y3Y4);
-		const _Data va11 = _Mul(vLRSamples, vFracXY);
-
-		const _Data va0010 = _Add(va00, va10);
-		const _Data va0111 = _Add(va01, va11);
-
-		const _Data sample = _Add(va0010, va0111);
-		const _Data sampleSq = _Mul(sample, sample);
-
-#ifdef USE_REMAP
-		const _Data weights = _LoadA(&w.pixelWeights[0]);
-		const _Data tempWeights = _LoadA(&w.pixelTempWeights[0]);
-#else
-		const _Data weights  = _SetN(w.pixelWeights[5], w.pixelWeights[10], w.pixelWeights[15], w.pixelWeights[20]); // _Load(&w.pixelWeights[1]);
-		const _Data tempWeights  = _SetN(w.pixelTempWeights[5], w.pixelTempWeights[10], w.pixelTempWeights[15], w.pixelTempWeights[20]); // _Load(&w.pixelTempWeights[1]);
-#endif
-
-		const _Data weightedSample = _Mul(sample, weights);
-		const _Data weightedSampleSq = _Mul(sampleSq, weights);
-		const _Data weightedNum = _Mul(sample, tempWeights);
-
-		vSum4 = _Add(vSum4, weightedSample);
-		vSumSq4 = _Add(vSumSq4, weightedSampleSq);
-		vNum4 = _Add(vNum4, weightedNum);
-	}
-
-	// Do the remaining 4x5 block one row at a time:
-	//  1  2  3  4
-	//  6  7  8  9
-	// 11 12 13 14
-	// 16 17 18 19
-	// 21 22 23 24
-	_Data vX1X2X3X4 = sh.mVTopRowX4;
-	_Data vY1Y2Y3Y4 = sh.mVTopRowY4;
-	_Data vZ1Z2Z3Z4 = sh.mVTopRowZ4;
-
-	// This calculation does not benefit from additional staggering of instructions.
-	// Combining the above block with this, processing N pixels at a time (for
-	// grouping), hurts performance.
-	// Processing by row seems to be ideal.
-	const _Data vBasisVX = _Splat(sh.mVBasisV, 0);
-	const _Data vBasisVY = _Splat(sh.mVBasisV, 1);
-	const _Data vBasisVZ = _Splat(sh.mVBasisV, 2);
-
-	_Data startZs = vZ1Z2Z3Z4;
-	_Data vOne = _Set(1.f);
-	_Data vOneQuarter = _Set(0.25f);
-	_Data vFour = _Set(4.f - FLT_EPSILON);
-	_Data vEndZs = _Add( vZ1Z2Z3Z4, _Mul(vBasisVZ, vFour ));
-	_Data vInvStartZs = _Div(vOne, startZs);
-	_Data vInvEndZs = _Div(vOne, vEndZs);
-	_Data vDeltaZs = _Mul(_Sub(vInvEndZs, vInvStartZs), vOneQuarter);
-	_Data vInvZ1Z2Z3Z4 = vInvStartZs;
-	//this needs to work on the reciprocal of z
-#endif
-
-#if 1
-	_Data vPtx, vPty;
-
-	vPtx = _Div(sh.mVLeftColX4, sh.mVLeftColZ4);
-	vPty = _Div(sh.mVLeftColY4, sh.mVLeftColZ4);
-
-	_DataI vPtxAsInt, vPtyAsInt;
-
-	vPtxAsInt = _TruncateIF(vPtx);
-	vPtyAsInt = _TruncateIF(vPty);
-
-	const uchar* pSampleUL;
-	const uchar* pSampleUR;
-	const uchar* pSampleLL;
-	const uchar* pSampleLR;
-
-	pSampleUL =
+	const uchar* pSampleUL =
 		imageInfo.data2 + _AsArrayI(vPtyAsInt, 0) * rowByteStride
-		+ _AsArrayI(vPtxAsInt, 0) * 4 * 4;
-	pSampleUR =
+		+ _AsArrayI(vPtxAsIntx16, 0);
+	const uchar* pSampleUR =
 		imageInfo.data2 + _AsArrayI(vPtyAsInt, 1) * rowByteStride
-		+ _AsArrayI(vPtxAsInt, 1) * 4 * 4;
-	pSampleLL =
+		+ _AsArrayI(vPtxAsIntx16, 1);
+	const uchar* pSampleLL =
 		imageInfo.data2 + _AsArrayI(vPtyAsInt, 2) * rowByteStride
-		+ _AsArrayI(vPtxAsInt, 2) * 4 * 4;
-	pSampleLR =
+		+ _AsArrayI(vPtxAsIntx16, 2);
+	const uchar* pSampleLR =
 		imageInfo.data2 + _AsArrayI(vPtyAsInt, 3) * rowByteStride
-		+ _AsArrayI(vPtxAsInt, 3) * 4 * 4;
+		+ _AsArrayI(vPtxAsIntx16, 3);
 
-	_Data vSampleUL, vSampleUR, vSampleLL, vSampleLR;
+	_Data vSampleUL = _LoadA((float*) pSampleUL);
+	_Data vSampleUR = _LoadA((float*) pSampleUR);
+	_Data vSampleLL = _LoadA((float*) pSampleLL);
+	_Data vSampleLR = _LoadA((float*) pSampleLR);
 
-	vSampleUL = _Load((float*) pSampleUL);
-	vSampleUR = _Load((float*) pSampleUR);
-	vSampleLL = _Load((float*) pSampleLL);
-	vSampleLR = _Load((float*) pSampleLR);
-
-	_Data vFracX1X2X3X4, vFracY1Y2Y3Y4;
-
-	vFracX1X2X3X4 = _Sub(vPtx, _ConvertFI(vPtxAsInt)); // pt(i).x - (int) pt(i).x
-	vFracY1Y2Y3Y4 = _Sub(vPty, _ConvertFI(vPtyAsInt)); // pt(i).y - (int) pt(i).y
+	_Data vFracX1X2X3X4 = _Sub(vPtx, _ConvertFI(vPtxAsInt)); // pt(i).x - (int) pt(i).x
+	_Data vFracY1Y2Y3Y4 = _Sub(vPty, _ConvertFI(vPtyAsInt)); // pt(i).y - (int) pt(i).y
 
 	_MM_TRANSPOSE4_PS(vSampleUL, vSampleUR, vSampleLL, vSampleLR); // 0.7
 
-	_Data vFracXY;
-	vFracXY = _Mul(vFracX1X2X3X4, vFracY1Y2Y3Y4);
+	_Data vFracXY = _Mul(vFracX1X2X3X4, vFracY1Y2Y3Y4);
 
 	_Data va00 = vSampleUL;;
 	_Data va10 = _Mul(vSampleUR, vFracX1X2X3X4);
 	_Data va01 = _Mul(vSampleLL, vFracY1Y2Y3Y4);
 	_Data va11 = _Mul(vSampleLR, vFracXY);
 
-	_Data va0010, va0111;
-
-	va0010 = _Add(va00, va10);
-	va0111 = _Add(va01, va11);
+	_Data va0010 = _Add(va00, va10);
+	_Data va0111 = _Add(va01, va11);
 
 	sample = _Add(va0010, va0111);
 
-	_Data sampleSq;
-	sampleSq = _Mul(sample, sample);
+	_Data sampleSq = _Mul(sample, sample);
 
 	_Data weights =  _LoadA(&w.pixelWeights[0]);
 	_Data tempWeights = _LoadA(&w.pixelTempWeights[0]);
@@ -1569,30 +1247,83 @@ SampleInfo GatherSampleInfo(
 	_Data vY1Y2Y3Y4 = sh.mVTopRowY4;
 	_Data vZ1Z2Z3Z4 = sh.mVTopRowZ4;
 
-	for (int i = 0; i < 5; ++i) {
-		vPtx = _Div(vX1X2X3X4, vZ1Z2Z3Z4);
-		vPty = _Div(vY1Y2Y3Y4, vZ1Z2Z3Z4);
+	vPtx = _Div(vX1X2X3X4, vZ1Z2Z3Z4);
+	vPty = _Div(vY1Y2Y3Y4, vZ1Z2Z3Z4);
 
+	const _Data vBasisVX = sh.mvBasisVX;
+	const _Data vBasisVY = sh.mvBasisVY;
+	const _Data vBasisVZ = sh.mvBasisVZ;
+
+	const _DataI vRowByteStride = _SetI(rowByteStride);
+	const _DataI vImageBasePtr = _mm_set1_epi64x((__int64) imageInfo.data2);
+	// Handle the 5 rows of 4 samples adjacent (everything else of the 5x5 block).
+	for (int i = 0; i < 5; ++i) {
+		// Get the x,y projection of each of the four samples.
+
+		// Prepare whole and fraction parts of each projection coordinate.
 		vPtxAsInt = _TruncateIF(vPtx);
 		vPtyAsInt = _TruncateIF(vPty);
 
+		// Prepare the image offset for each sample.
+		// We are referencing 16 byte wide samples.
 		const _Data vPtxAsIntFloat = _ConvertFI(vPtxAsInt);
+		vPtxAsIntx16 = _ShiftLI(vPtxAsInt, 4);
 		const _Data vPtyAsIntFloat = _ConvertFI(vPtyAsInt);
 
-		pSampleUL = imageInfo.data2 + _AsArrayI(vPtyAsInt, 0) * rowByteStride + (_AsArrayI(vPtxAsInt, 0) << 4);
-		pSampleUR = imageInfo.data2 + _AsArrayI(vPtyAsInt, 1) * rowByteStride + (_AsArrayI(vPtxAsInt, 1) << 4);
-		pSampleLL = imageInfo.data2 + _AsArrayI(vPtyAsInt, 2) * rowByteStride + (_AsArrayI(vPtxAsInt, 2) << 4);
-		pSampleLR = imageInfo.data2 + _AsArrayI(vPtyAsInt, 3) * rowByteStride + (_AsArrayI(vPtxAsInt, 3) << 4);
+#if 0
+#if 1
+	const _DataI vPtyAsInt13 = _mm_srli_si128(vPtyAsInt, 4);
+	// Warning _mm_and_epi32 is an AVX instruction.
+	const _DataI vPtxAsIntx1602 = _AndI(vPtxAsIntx16, vOneThree);
+	const _DataI vPtxAsIntx1613 =  _mm_srli_epi64(vPtxAsIntx16, 32);
+	const _DataI tmp1 = _mm_mul_epu32(vPtyAsInt,vRowByteStride); /* mul 2,0*/
+	const _DataI tmp2 = _mm_mul_epu32( vPtyAsInt13, vRowByteStride); /* mul 3,1 */
+	const _DataI tmp3 = _mm_add_epi64(tmp1, vPtxAsIntx1602);
+	const _DataI tmp4 = _mm_add_epi64(tmp2, vPtxAsIntx1613); // _AndI(_mm_srli_si128(vPtxAsIntx16, 4), vOneThree));
+	const _DataI tmp5 = _mm_add_epi64(tmp3, vImageBasePtr);
+	const _DataI tmp6 = _mm_add_epi64(tmp4, vImageBasePtr);
 
-		vSampleUL = _Load((float*) pSampleUL);
-		vSampleUR = _Load((float*) pSampleUR);
-		vSampleLL = _Load((float*) pSampleLL);
-		vSampleLR = _Load((float*) pSampleLR);
+	// Fetch the components for each sample (remember 4 floats each).
+	vSampleUL = _LoadA((float*) tmp5.m128i_u64[0]);
+	vSampleUR = _LoadA((float*) tmp5.m128i_u64[1]);
+	vSampleLL = _LoadA((float*) tmp6.m128i_u64[0]);
+	vSampleLR = _LoadA((float*) tmp6.m128i_u64[1]);
+#else
+  _DataI tmp1           = _mm_mul_epu32(vPtyAsInt,vRowByteStride); /* mul 2,0*/
+	// tmp1[0,1] has vPtyAsInt[0] * vRowByteStride, tmp[2,3] has vPtyAsInt[2] * vRowByteStride;
+  _DataI tmp2           = _mm_mul_epu32( _mm_srli_si128(vPtyAsInt,4), vRowByteStride); /* mul 3,1 */
+	// tmp2[0,1] has vPtyAsInt[1] * vRowByteStride, tmp[2,3] has vPtyAsInt[3] * vRowByteStride;
+	tmp1 = _mm_add_epi64(tmp1, _mm_and_epi32(vPtxAsIntx16, vOneThree));
+	// tmp1[0,1] has vPtyAsInt[0] * vRowByteStride + vPtxAsIntx16[0], tmp[2,3] has vPtyAsInt[2] * vRowByteStride + vPtxAsIntx16[2]
+	tmp2 = _mm_add_epi64(tmp2, _mm_srli_epi64(vPtxAsIntx16, 32)); // _mm_and_epi32(_mm_srli_si128(vPtxAsIntx16, 4), vOneThree));
+	// tmp2[0,1] has vPtyAsInt[1] * vRowByteStride + vPtxAsIntx16[1], tmp[2,3] has vPtyAsInt[3] * vRowByteStride + vPtxAsIntx16[3];
+	tmp1 = _mm_add_epi64(tmp1, vImageBasePtr);
+	tmp2 = _mm_add_epi64(tmp2, vImageBasePtr);
+
+		// Fetch the components for each sample (remember 4 floats each).
+		vSampleUL = _LoadA((float*) tmp1.m128i_u64[0]);
+		vSampleUR = _LoadA((float*) tmp1.m128i_u64[1]);
+		vSampleLL = _LoadA((float*) tmp2.m128i_u64[0]);
+		vSampleLR = _LoadA((float*) tmp2.m128i_u64[1]);
+#endif
+#else
+		pSampleUL = imageInfo.data2 + _AsArrayI(vPtyAsInt, 0) * rowByteStride + (_AsArrayI(vPtxAsIntx16, 0));
+		pSampleUR = imageInfo.data2 + _AsArrayI(vPtyAsInt, 1) * rowByteStride + (_AsArrayI(vPtxAsIntx16, 1));
+		pSampleLL = imageInfo.data2 + _AsArrayI(vPtyAsInt, 2) * rowByteStride + (_AsArrayI(vPtxAsIntx16, 2));
+		pSampleLR = imageInfo.data2 + _AsArrayI(vPtyAsInt, 3) * rowByteStride + (_AsArrayI(vPtxAsIntx16, 3));
+
+		// Fetch the components for each sample (remember 4 floats each).
+		vSampleUL = _LoadA((float*) pSampleUL);
+		vSampleUR = _LoadA((float*) pSampleUR);
+		vSampleLL = _LoadA((float*) pSampleLL);
+		vSampleLR = _LoadA((float*) pSampleLR);
+#endif
 
 		vFracX1X2X3X4 = _Sub(vPtx, vPtxAsIntFloat); // pt(i).x - (int) pt(i).x
 		vFracY1Y2Y3Y4 = _Sub(vPty, vPtyAsIntFloat); // pt(i).y - (int) pt(i).y
 
-		_MM_TRANSPOSE4_PS(vSampleUL, vSampleUR, vSampleLL, vSampleLR); // 0.7
+		// Reform the components as SOA for more efficient SIMD processing.
+		_MM_TRANSPOSE4_PS(vSampleUL, vSampleUR, vSampleLL, vSampleLR);
 
 		vFracXY = _Mul(vFracX1X2X3X4, vFracY1Y2Y3Y4);
 
@@ -1604,139 +1335,85 @@ SampleInfo GatherSampleInfo(
 		va0010 = _Add(va00, va10);
 		va0111 = _Add(va01, va11);
 
+		// sample is the full bilinear sample for each of the four samples.
 		sample = _Add(va0010, va0111);
 
+		// From this we maintain weighted samples, temp weighted samples and the
+		// sample squared of the weighted sample.
 		sampleSq = _Mul(sample, sample);
 
 		weights =  _LoadA(&w.pixelWeights[4+i*4]);
 		tempWeights = _LoadA(&w.pixelTempWeights[4+i*4]);
-
 		weightedSample = _Mul(sample, weights);
 		weightedSampleSq = _Mul(sampleSq, weights);
 		weightedNum = _Mul(sample, tempWeights);
 
+		// Sum the contributions for each of the maintained quantities.
+		// Remember, we are maintaining groups.
 		vSum4 = _Add(vSum4, weightedSample);
 		vSumSq4 = _Add(vSumSq4, weightedSampleSq);
 		vNum4 = _Add(vNum4, weightedNum);
 
-		vX1X2X3X4 = _Add(vX1X2X3X4, sh.mvBasisVX);
-		vY1Y2Y3Y4 = _Add(vY1Y2Y3Y4, sh.mvBasisVY);
-		vZ1Z2Z3Z4 = _Add(vZ1Z2Z3Z4, sh.mvBasisVZ);
-	}
-
-	return { vSum4, vSumSq4, vNum4 };
-#else
-
-	const _Data vBasisVX = _Splat(sh.mVBasisV, 0);
-	const _Data vBasisVY = _Splat(sh.mVBasisV, 1);
-	const _Data vBasisVZ = _Splat(sh.mVBasisV, 2);
-
-	_Data vX1X2X3X4 = sh.mVLeftColX4;
-	_Data vY1Y2Y3Y4 = sh.mVLeftColY4;
-	_Data vZ1Z2Z3Z4 = sh.mVLeftColZ4;
-
-	for (auto i = 0; i < 6; ++i) {
-		// Requires accuracy.
-		// Update all coordinates for the next row.
-
-		const _Data vPtx = _Div(vX1X2X3X4, vZ1Z2Z3Z4);
-		const _Data vPty = _Div(vY1Y2Y3Y4, vZ1Z2Z3Z4);
-
-		const _DataI vPtxAsInt = _TruncateIF(vPtx);
-		const _DataI vPtyAsInt = _TruncateIF(vPty);
-
-		const uchar* __restrict pSample0 =
-			imageInfo.data2 + _AsArrayI(vPtyAsInt, 0) * rowByteStride
-			+ _AsArrayI(vPtxAsInt, 0) * 4 * 4;
-		const uchar* __restrict pSample1 =
-			imageInfo.data2 + _AsArrayI(vPtyAsInt, 1) * rowByteStride
-			+ _AsArrayI(vPtxAsInt, 1) * 4 * 4;
-		const uchar* __restrict pSample2 =
-			imageInfo.data2 + _AsArrayI(vPtyAsInt, 2) * rowByteStride
-			+ _AsArrayI(vPtxAsInt, 2) * 4 * 4;
-		const uchar* __restrict pSample3 =
-			imageInfo.data2 + _AsArrayI(vPtyAsInt, 3) * rowByteStride
-			+ _AsArrayI(vPtxAsInt, 3) * 4 * 4;
-
-		_Data vULSamples = _Load((float*) pSample0);
-		_Data vURSamples =  _Load((float*)pSample1);
-		_Data vLLSamples = _Load((float*)pSample2);
-		_Data vLRSamples =  _Load((float*)pSample3);
-
-		const _Data vFracX1X2X3X4 = _Sub(vPtx, _ConvertFI(vPtxAsInt)); // pt(i).x - (int) pt(i).x
-		const _Data vFracY1Y2Y3Y4 = _Sub(vPty, _ConvertFI(vPtyAsInt)); // pt(i).y - (int) pt(i).y
-
-		_MM_TRANSPOSE4_PS(vULSamples, vURSamples, vLLSamples, vLRSamples); // 0.7
-
-		const _Data vFracXY = _Mul(vFracX1X2X3X4, vFracY1Y2Y3Y4);
-
-		const _Data va00 = vULSamples;
-		const _Data va10 = _Mul(vURSamples, vFracX1X2X3X4);
-		const _Data va01 = _Mul(vLLSamples, vFracY1Y2Y3Y4);
-		const _Data va11 = _Mul(vLRSamples, vFracXY);
-
-		const _Data va0010 = _Add(va00, va10);
-		const _Data va0111 = _Add(va01, va11);
-
-		const _Data sample = _Add(va0010, va0111);
-		const _Data sampleSq = _Mul(sample, sample);
-
-#ifdef USE_REMAP
-		const _Data weights = _LoadA(&w.pixelWeights[i*4]);
-		const _Data tempWeights = _LoadA(&w.pixelTempWeights[i*4]);
-#else
-		const _Data weights = _Load(&w.pixelWeights[1+i*5]); // 5+i*4]);
-		const _Data tempWeights = _Load(&w.pixelTempWeights[1+i*5]); // 5+i*4]);
-#endif
-
-		const _Data weightedSample = _Mul(sample, weights);
-		const _Data weightedSampleSq = _Mul(sampleSq, weights);
-		const _Data weightedNum = _Mul(sample, tempWeights);
-
-		vSum4 = _Add(vSum4, weightedSample);
-		vSumSq4 = _Add(vSumSq4, weightedSampleSq);
-		vNum4 = _Add(vNum4, weightedNum);
-
-		if (0 == i) {
-			vX1X2X3X4 = sh.mVTopRowX4;
-			vY1Y2Y3Y4 = sh.mVTopRowY4;
-			vZ1Z2Z3Z4 = sh.mVTopRowZ4;
-		} else {
+		// Advance to the next row of the patch.
 			vX1X2X3X4 = _Add(vX1X2X3X4, vBasisVX);
 			vY1Y2Y3Y4 = _Add(vY1Y2Y3Y4, vBasisVY);
 			vZ1Z2Z3Z4 = _Add(vZ1Z2Z3Z4, vBasisVZ);
-		}
+
+		vPtx = _Div(vX1X2X3X4, vZ1Z2Z3Z4);
+		vPty = _Div(vY1Y2Y3Y4, vZ1Z2Z3Z4);
 	}
 
-	return { vSum4, vSumSq4, vNum4 };
-#endif
-}
+	// sum4, num4 and sumSq4 are spread across their SIMD registers.
+	// Here we have to sum their registers horizontally to get the
+	// 5x5 sample block's total contribution.
 
-bool DepthEstimator::ScorePixelImage(
-	const ImageInfo_t& imageInfo
-)
-{
-	const SampleInfo si = GatherSampleInfo(imageInfo, pWeightMap, sh);
+	// This is purposely unfolded to help deduce dependency stalls.
+	// Although vNum4 may not be needed by the caller, it is calculated
+	// here as the dependency stalls essentially make this free.
+#if 0 // Depending on SSE3 gets a bit more performance, but it isn't significant.
+    __m128 shuf1 = _mm_movehdup_ps(vSum4);        // broadcast elements 3,1 to 2,0
+    __m128 shuf2 = _mm_movehdup_ps(vSumSq4);        // broadcast elements 3,1 to 2,0
+    __m128 shuf3 = _mm_movehdup_ps(vNum4);        // broadcast elements 3,1 to 2,0
+    __m128 sums1 = _mm_add_ps(vSum4, shuf1);
+    __m128 sums2 = _mm_add_ps(vSumSq4, shuf2);
+    __m128 sums3 = _mm_add_ps(vNum4, shuf3);
+    shuf1        = _mm_movehl_ps(shuf1, sums1); // high half -> low half
+    shuf2        = _mm_movehl_ps(shuf2, sums2); // high half -> low half
+    shuf3        = _mm_movehl_ps(shuf3, sums3); // high half -> low half
+    sums1        = _mm_add_ss(sums1, shuf1);
+    sums2        = _mm_add_ss(sums2, shuf2);
+    sums3        = _mm_add_ss(sums3, shuf3);
+#else
+	_Data shuf1 = _mm_shuffle_ps(vSum4, vSum4, _MM_SHUFFLE(2, 3, 0, 1));     // [ C D | B A ]
+	_Data shuf2 = _mm_shuffle_ps(vSumSq4, vSumSq4, _MM_SHUFFLE(2, 3, 0, 1)); // [ C D | B A ]
+	_Data shuf3 = _mm_shuffle_ps(vNum4, vNum4, _MM_SHUFFLE(2, 3, 0, 1));     // [ C D | B A ]
 
-	// Gather the single scalar sum/sumSq/num and add the 24 vectorized sum/sumSq/num
-	// values together.
-	_Data shuf1            = _mm_shuffle_ps(si.vSum4, si.vSum4, _MM_SHUFFLE(2, 3, 0, 1)); /* [ C D | B A ] */
-	_Data shuf2            = _mm_shuffle_ps(si.vSumSq4, si.vSumSq4, _MM_SHUFFLE(2, 3, 0, 1)); /* [ C D | B A ] */
+	_Data sums1 = _Add(vSum4, shuf1);                                        // sums = [ D+C C+D | B+A A+B ]
+	_Data sums2 = _Add(vSumSq4, shuf2);                                      // sums = [ D+C C+D | B+A A+B ]
+	_Data sums3 = _Add(vNum4, shuf3);                                        // sums = [ D+C C+D | B+A A+B ]
 
-	_Data sums1            = _Add(si.vSum4, shuf1);                                 /* sums = [ D+C C+D | B+A A+B ] */
-	_Data sums2            = _Add(si.vSumSq4, shuf2);                                 /* sums = [ D+C C+D | B+A A+B ] */
-
-
-	shuf1                  = _mm_movehl_ps(shuf1, sums1);                     /*  [   C   D | D+C C+D ] let the compiler avoid a mov by reusing shuf */
-	shuf2                  = _mm_movehl_ps(shuf2, sums2);                     /*  [   C   D | D+C C+D ] let the compiler avoid a mov by reusing shuf */
+	shuf1 = _mm_movehl_ps(shuf1, sums1);                                     // [   C   D | D+C C+D ] let the compiler avoid a mov by reusing shuf
+	shuf2 = _mm_movehl_ps(shuf2, sums2);                                     // [   C   D | D+C C+D ] let the compiler avoid a mov by reusing shuf
+	shuf3 = _mm_movehl_ps(shuf3, sums3);                                     // [ C D | D+C C+D ] let the compiler avoid a mov by reusing shuf
 
 	sums1                  = _mm_add_ss(sums1, shuf1);
 	sums2                  = _mm_add_ss(sums2, shuf2);
+	sums3 = _mm_add_ss(sums3, shuf3);
+#endif
 
-	const float sum = _vFirst(sums1);
-	const float sumSq = _vFirst(sums2);
+	sumResult = _vFirst(sums1);
+	sumSqResult = _vFirst(sums2);
+	numResult = _vFirst(sums3);
+	}
 
-	// score similarity of the reference and target texture patches
+bool __declspec(safebuffers) DepthEstimator::ScorePixelImage(
+	const ImageInfo_t& imageInfo
+) noexcept
+{
+	float sum, sumSq, num;
+	GatherSampleInfo(imageInfo, sum, sumSq, num);
+
+	// Score similarity of the reference and target texture patches
 	#if DENSE_NCC == DENSE_NCC_FAST
 	const float normSq1(sumSq-SQUARE(sum/nSizeWindow));
 	#elif DENSE_NCC == DENSE_NCC_WEIGHTED
@@ -1751,13 +1428,8 @@ bool DepthEstimator::ScorePixelImage(
 		return false;
 	}
 
-	_Data shuf3            = _mm_shuffle_ps(si.vNum4, si.vNum4, _MM_SHUFFLE(2, 3, 0, 1)); /* [ C D | B A ] */
-	_Data sums3            = _Add(si.vNum4, shuf3);                                 /* sums = [ D+C C+D | B+A A+B ] */
-	shuf3                  = _mm_movehl_ps(shuf3, sums3);                     /*  [   C   D | D+C C+D ] let the compiler avoid a mov by reusing shuf */
-	sums3                  = _mm_add_ss(sums3, shuf3);
-
 	const size_t scoreIdx = scoreResults.numScoreResults;
-	scoreResults.pNums[scoreIdx] = _vFirst(sums3);
+	scoreResults.pNums[scoreIdx] = num;
 	scoreResults.pNrmSqs[scoreIdx] = nrmSq;
 
 	// Is there a depth map contribution?
@@ -1806,12 +1478,12 @@ bool DepthEstimator::ScorePixelImage(
 				const _Data vS = _Sub(vPAsFloat, _ConvertFI(vPAsInt));
 				const _Data vOneMinusS = _Sub(vOne, vS);
 
+				// JPB WIP OPT Tried a variety of different masking techniques including table lookups and bit shifting... none were faster.
 				const int b00 =  mask&1; //_AsArrayI(_CastIF(vCmp), 0) == 0xFFFFFFFF;
 				const int b10 =  mask&2; //_AsArrayI(_CastIF(vCmp), 1) == 0xFFFFFFFF;
 				const int b01 =  mask&4; //_AsArrayI(_CastIF(vCmp), 2) == 0xFFFFFFFF;
 				const int b11 =  mask&8; //_AsArrayI(_CastIF(vCmp), 3) == 0xFFFFFFFF;
 
-				// JPB WIP OPT Tried a variety of different masking techniques including table lookups and bit shifting... none were faster.
 				const float x0y0 = _AsArray(vSamples, 0);
 				const float x1y0 = _AsArray(vSamples, 1);
 				const float x0y1 = _AsArray(vSamples, 2);
@@ -1856,7 +1528,7 @@ float DepthEstimator::ScorePixelImageOrig(
 	const DepthData::ViewData& image1, Depth depth, const Normal& normal)
 {
 	// center a patch of given size on the segment and fetch the pixel values in the target image
-	Matrix3x3f H(ComputeHomographyMatrix(image1, depth, normal, X0));
+	Matrix3x3f H(ComputeHomographyMatrix(image1, depth, normal, Point3(_AsArray(vX0, 0), _AsArray(vX0, 1), _AsArray(vX0, 2))));
 	Point3f X;
 	ProjectVertex_3x3_2_3(H.val, Point2f(float(x0.x-nSizeHalfWindow),float(x0.y-nSizeHalfWindow)).ptr(), X.ptr());
 	Point3f baseX(X);
@@ -1970,24 +1642,7 @@ float DepthEstimator::ScorePixelImageOrig(
 }
 #endif // DPC_FASTER_SAMPLING
 
-#if 0 // JPB WIP BUG
-std::atomic<double> tries = 0;
-std::atomic<double> pass = 0;
-// compute pixel's NCC score
-#define _MM_TRANSPOSE2_PS(row0, row1, row2, row3) {                 \
-            __m128 _Tmp3, _Tmp2, _Tmp1, _Tmp0;                          \
-                                                                    \
-            _Tmp0   = _mm_shuffle_ps((row0), (row1), 0x44);          \
-            _Tmp2   = _mm_shuffle_ps((row0), (row1), 0xEE);          \
-                                                                    \
-            (row0) = _mm_shuffle_ps(_Tmp0, _SetZero(), 0x88);              \
-            (row1) = _mm_shuffle_ps(_Tmp0, _SetZero(), 0xDD);              \
-            (row2) = _mm_shuffle_ps(_Tmp2, _SetZero(), 0x88);              \
-            (row3) = _mm_shuffle_ps(_Tmp2, _SetZero(), 0xDD);              \
-        }
-#endif
-
-float DepthEstimator::ScorePixel(Depth depth, const Normal4 normal)
+float DepthEstimator::ScorePixel(Depth depth, const Normal4& normal)
 {
 	ASSERT(depth > 0 && normal.Dot3S(vX0) <= 0);
 	// compute score for this pixel as seen in each view
@@ -1996,14 +1651,10 @@ float DepthEstimator::ScorePixel(Depth depth, const Normal4 normal)
 	const float dot = normal.Dot3S(vX0);
 
 	if (FastAbsS(dot) < 0.000001f) {
-		//float factor = 1.f / ( depth * normal.Dot3S(vX0) );
-		//std::cout << "Factor is " << factor << " dot is " << dot << "\n";
-		//flushall();
 		return thRobust;
 	}
 
-	float factor = 1.f / (depth * dot);
-
+	const float factor = 1.f / (depth * dot);
 	sh.Detail(
 		depth,
 		_Mul(normal.data, _Set(factor)),
@@ -2014,7 +1665,7 @@ float DepthEstimator::ScorePixel(Depth depth, const Normal4 normal)
 	const Vec3 normalD(_AsArray(normal.data, 0), _AsArray(normal.data, 1), _AsArray(normal.data, 2));
 	sh.Detail(
 		depth,
-		Matx13_t(normalD.t()*INVERT(normalD.dot(X0) * depth)), // Always double.
+		Matx13_t(normalD.t()*INVERT(normalD.dot(Vec3(_AsArray(vX0, 0), _AsArray(vX0, 1), _AsArray(vX0, 2))) * depth)), // Always double.
 		_Mul(vX0, _Set(depth)),
 		mLowResDepth
 	);
@@ -2064,7 +1715,7 @@ float DepthEstimator::ScorePixel(Depth depth, const Normal4 normal)
 	// branching.
 	const size_t numElems = NumElemsForSize(scoreResults.numScoreResults);
 	for (size_t i = 0; i < numElems; i += GROUP_SIZE) {
-		// Beware: We may process partial groups where ultimately portions
+		// Beware: we may process partial groups where ultimately portions
 		// of the registers may be undefined.
 
 		// All calculations need:
@@ -2074,7 +1725,7 @@ float DepthEstimator::ScorePixel(Depth depth, const Normal4 normal)
 		// score *= sh.mVScoreFactor;
 		// #endif
 		// 
-		// if scoreResults.pScores[n] is eHitDepthMap, then it needs a score attenuation based on a weighted depth map consistency calulation.
+		// if scoreResults.pScores[n] is eHitDepthMap, then it needs a score attenuation based on a weighted depth map consistency calculation.
 		//		score += OPTDENSE::fEstimationGeometricWeight * vConsistencies;
 		// 
 		// If scoreResults.pScores[n] is eMissedDepthMap, then it needs a score attenuation based on a weighted constant.
@@ -2130,9 +1781,7 @@ float DepthEstimator::ScorePixel(Depth depth, const Normal4 normal)
 			_Data vz0z1z2z3 = scoreResults.pVs[i + 2];
 			_Data vw0w1w2w3 = scoreResults.pVs[i + 3];
 
-			// JPB WIP BUG Revisit on transpose
-
-			_MM_TRANSPOSE4_PS(
+			_MM_TRANSPOSE4_PS( // vw0w1w2w3 will be all zeros and unused.
 				vx0x1x2x3,
 				vy0y1y2y3,
 				vz0z1z2z3,
@@ -2152,6 +1801,8 @@ float DepthEstimator::ScorePixel(Depth depth, const Normal4 normal)
 
 			const _Data vDist = _Sqrt(vDeltaXYSqSum);
 
+			// Constants have a long latency, but the compiler is smart enough to
+			// create them far earlier to avoid this.
 			constexpr _Data vTwo = { 2.f, 2.f, 2.f, 2.f };
 			const _Data vConsistenciesLhs = _Mul(vDist, _Add(vDist, vTwo));
 			const _Data vConsistencies = _Min(_Sqrt(vConsistenciesLhs), vDefaultConsistencies);
@@ -2185,7 +1836,8 @@ float DepthEstimator::ScorePixel(Depth depth, const Normal4 normal)
 		// Attenuate score based on the low resolution depth map "apply depth prior weight based on patch textureless".
 		// Frequently called during first pass.
 		// Scorable almost all of the time.
-		const _Data vScaledDeltaDepth = _Mul(vFactorDeltaDepth, sh.mvDeltaDepth);
+		// Remember, its possible all of these are defined.
+		const _Data vScaledDeltaDepth = _Mul(vFactorDeltaDepth, _Set(sh.mDeltaDepth));
 
 		// Groups of two to reduce stalls.
 		size_t i = 0;
@@ -2222,72 +1874,23 @@ float DepthEstimator::ScorePixel(Depth depth, const Normal4 normal)
 #endif
 #endif // DPC_FASTER_SAMPLING
 
-#if 1
+	// Revisit n'th element for the special case of 2.
 	float smallest = scoreResults.pScores[0];
 	float secondSmallest = FLT_MAX;
-	for (int i = 1; i < scoreResults.numScoreResults; ++i) {
-		const float value = scoreResults.pScores[i];
-		if (value < secondSmallest) {
-			if (value < smallest) {
-				secondSmallest = smallest;
-				smallest = value;
+	for (size_t i = 1; i < scoreResults.numScoreResults; ++i) {
+		const uint32_t value = (uint32_t&) scoreResults.pScores[i];
+		if (value < (uint32_t&) secondSmallest) {
+			if (value < (uint32_t&) smallest) {
+				(uint32_t&) secondSmallest = (uint32_t&) smallest;
+				(uint32_t&) smallest = value;
 			}
 			else {
-				secondSmallest = value;
+				(uint32_t&) secondSmallest = value;
 			}
 		}
 	}
 
 	return 0.5f * (smallest + ( secondSmallest < thRobust ? secondSmallest : smallest ) );
-#else
-	float smallest2[2] = { scoreResults.pScores[0], FLT_MAX };
-	for (int i = 1; i < scoreResults.numScoreResults; ++i) {
-		const float value = scoreResults.pScores[i];
-		if (value < smallest2[1]) {
-			if (value < smallest2[0]) {
-				smallest2[1] = smallest2[0];
-				smallest2[0] = value;
-			} else {
-				smallest2[1] = value;
-			}
-		}
-	}
-
-	smallest2[1] += smallest2[0];
-	smallest2[1] *= 0.5f;
-
-	return smallest2[smallest2[1] < thRobust];
-#endif
-
-#if 0
-	if (secondSmallest >= thRobust) {
-		return smallest;
-	} else {
-		return (smallest + secondSmallest) / 2.f;
-	}
-#endif
-
-#if 0
-	scoreResults.pScores[0] = smallest;
-	scoreResults.pScores[1] = secondSmallest;
-
-	auto nth(&scoreResults.pScores[1]);
-
-	float* pescore = &scoreResults.pScores[1];
-	float* pscore = scoreResults.pScores;
-	int n = 1;
-	float score = scoreResults.pScores[0];
-	do {
-		const float s(*(++pscore));
-		if (s >= thRobust)
-			break;
-		score += s;
-		++n;
-	} while (pscore < pescore);
-	float myScore = score/n;
-
-	return myScore;
-#endif
 }
 
 // Interestingly moving this inside CalculateScoreFactor causes the mask table
@@ -2343,10 +1946,10 @@ _Data DepthEstimator::CalculateScoreFactor(
 	const _Data vExpFdSquaredDepthFactor = _SetN(DENSE_EXP(_AsArray(vFdSquaredDepthFactor, 0)), DENSE_EXP(_AsArray(vFdSquaredDepthFactor, 1)), DENSE_EXP(_AsArray(vFdSquaredDepthFactor, 2)), DENSE_EXP(_AsArray(vFdSquaredDepthFactor, 3)));
 #endif
 	const _Data vExpFdSquaredDepthFactorBD = _Mul(vExpFdSquaredDepthFactor, vSmoothBonusDepth);
-	constexpr _Data vOne = {1.f, 1.f, 1.f, 1.f};
+	constexpr _Data vOne {1.f, 1.f, 1.f, 1.f};
 	const _Data vScoreFactorLhs = _Sub(vOne, vExpFdSquaredDepthFactorBD);
 
-	constexpr _Data vNegOne = {-1.f, -1.f, -1.f, -1.f};
+	constexpr _Data vNegOne {-1.f, -1.f, -1.f, -1.f};
 	const _Data vAnglesClamped = FastClamp(neighborsCosPlaneNormalAngle, vNegOne, vOne);
 	const _Data vTmp = FastACos(vAnglesClamped);
 	const _Data vTmpSquared = _Mul(vTmp, vTmp);
@@ -2364,37 +1967,6 @@ _Data DepthEstimator::CalculateScoreFactor(
 
 	return FastHProduct(vScoreFactor);
 }
-
-#if 0
-// Not really that fast and not accurate enough for our needs.
-// https://stackoverflow.com/questions/18662261/fastest-implementation-of-sine-cosine-and-square-root-in-c-doesnt-need-to-b/28050328#28050328
-#define EXTRA_PRECISION
-inline _Data FastSin2Cos2(_Data x)
-{
-	// sin(x) = cos(x - HALF_PI);
-	// Return sin(x[0]), sin(x[1]), cos(x[2]), cos(x[3])
-	constexpr _Data vSin2Cos2Adjust = {(float) M_PI_2, (float) M_PI_2, 0.f, 0.f};
-	x = _Sub(x, vSin2Cos2Adjust);
-
-	constexpr _Data vTp = {((float) (1./(2.*M_PI))), ((float) (1./(2.*M_PI))), ((float) (1./(2.*M_PI))), ((float) (1./(2.*M_PI))) };
-
-	x = _Mul(x, vTp); //    x *= tp;
-
-	constexpr _Data vQuarter = {0.25f, 0.25f, 0.25f, 0.25f};
-	x = _Sub(x, _Add(vQuarter, Floor(_Add(x, vQuarter))));  // x -= T(.25) + std::floor(x + T(.25));
-	constexpr _Data v16 = {16.f, 16.f, 16.f, 16.f};
-	constexpr _Data vHalf = {0.5f, 0.5f, 0.5f, 0.5f};
-	x = _Mul(x, _Mul(v16, _Sub(FastAbs(x), vHalf)));        // x *= T(16.) * (std::abs(x) - T(.5));
-	#ifdef EXTRA_PRECISION
-	constexpr _Data C0 = {0.225f, 0.225f, 0.225f, 0.225f};
-	constexpr _Data vOne = {1.f, 1.f, 1.f, 1.f};
-	x = _Add(x, _Mul(C0, _Mul(x, _Sub(FastAbs(x), vOne)))); // x += T(.225) * x * (std::abs(x) - T(1.));
-	#endif
-
-	return x;
-}
-#endif
-
 
 // run propagation and random refinement cycles;
 // the solution belonging to the target image can be also propagated
@@ -2414,6 +1986,7 @@ void DepthEstimator::ProcessPixel(IDX idx)
 		if (!FillPixelPatch<true /* has a low res depth map */>())
 			return;
 	}
+
 	// find neighbors
 	ImageRef ppNeighbors[2]; //neighbors.Empty();
 	int numPPNeighbors = 0;
@@ -2638,7 +2211,7 @@ void DepthEstimator::ProcessPixel(IDX idx)
 		#endif
 		Normal nn = Normal(_AsArray(neighborNormal, 0), _AsArray(neighborNormal, 1), _AsArray(neighborNormal, 2));
 		ASSERT(ISEQUAL(norm(nn), 1.f)); // JPB WIP BUG 
-		Depth neighborDepth = InterpolatePixel(nx, neighborsCloseDepths[n], nn);
+		const Depth neighborDepth = InterpolatePixel(nx, neighborsCloseDepths[n], nn);
 		CorrectNormal(nn);
 		//ASSERT(neighbor.depth > 0 && neighbor.normal.dot(viewDir) <= 0);
 		#if DENSE_SMOOTHNESS == DENSE_SMOOTHNESS_PLANE
@@ -2730,6 +2303,8 @@ void DepthEstimator::ProcessPixel(IDX idx)
 #endif // DPC_FASTER_RANDOM_ITER_CALC
 
 			// Any ScorePixel needs sh.mVScoreFactor set accurately.
+			// However, here we are ignoring neighbors and sh.mVScoreFactor
+			// will be 1.
 			const float nconf(ScorePixel(ndepth, Normal4(nnormal)));
 			ASSERT(nconf >= 0);
 			if (conf > nconf) {
@@ -2739,8 +2314,9 @@ void DepthEstimator::ProcessPixel(IDX idx)
 				if (conf < thConfRand)
 					goto RefineIters;
 			}
-
+#ifdef DPC_FASTER_RANDOM_ITER_CALC
 			usenp2 = !usenp2;
+#endif
 		}
 		return;
 	}
@@ -2929,7 +2505,7 @@ Depth DepthEstimator::InterpolatePixel(const ImageRef& nx, Depth depth, const No
 	if (x0.x == nx.x) {
 		const float nx1((float)(((REAL)x0.y - image0.camera.K(1,2)) / image0.camera.K(1,1)));
 		const float denom(normal.z + nx1 * normal.y);
-		if (ISZERO(denom))
+		if (FastAbsS(denom) < FZERO_TOLERANCE)
 			return depth;
 		const float x1((float)(((REAL)nx.y - image0.camera.K(1,2)) / image0.camera.K(1,1)));
 		const float nom(depth * (normal.z + x1 * normal.y));
@@ -2939,7 +2515,7 @@ Depth DepthEstimator::InterpolatePixel(const ImageRef& nx, Depth depth, const No
 		ASSERT(x0.y == nx.y);
 		const float nx1((float)(((REAL)x0.x - image0.camera.K(0,2)) / image0.camera.K(0,0)));
 		const float denom(normal.z + nx1 * normal.x);
-		if (ISZERO(denom))
+		if (FastAbsS(denom) < FZERO_TOLERANCE)
 			return depth;
 		const float x1((float)(((REAL)nx.x - image0.camera.K(0,2)) / image0.camera.K(0,0)));
 		const float nom(depth * (normal.z + x1 * normal.x));
@@ -3550,7 +3126,7 @@ void MVS::EstimatePointNormals(const ImageArr& images, PointCloudStreaming& poin
 	typedef std::pair<point_t,vector_t> PointVectorPair;
 	// fetch the point set
 	const size_t numPoints = pointcloud.NumPoints();
-	std::vector<PointVectorPair> pointvectors(numPoints);
+	boost::container::vector<PointVectorPair> pointvectors(numPoints, boost::container::default_init); // std::vector<PointVectorPair> pointvectors(numPoints);
 	const float* pPoints = pointcloud.PointStream();
 	for (size_t i = 0; i < numPoints; ++i, pPoints += 3) {
 		pointvectors[i].first = point_t(pPoints[0], pPoints[1], pPoints[2]);
@@ -3585,18 +3161,21 @@ void MVS::EstimatePointNormals(const ImageArr& images, PointCloudStreaming& poin
 #endif
 	#endif
 	// store the point normals
-	pointcloud.ReserveNormals(numPoints);
 	pPoints = pointcloud.PointStream();
-	for (size_t i = 0; i < numPoints; ++i) {
-		const PointCloud::Point& point = (PointCloud::Point&) *pPoints;
+
+	pointcloud.normalsXYZ.resize(3 * numPoints);
+#pragma omp parallel for num_threads(omp_get_max_threads())
+	for (int64_t i = 0; i < (int64_t) numPoints; ++i) {
+		const PointCloud::Point& point = (PointCloud::Point&)(pPoints[i*3]);
 		const auto* pViews = pointcloud.ViewsStream(i);
-		Normal normal = Normal(pointvectors[i].second.x(), pointvectors[i].second.y(), pointvectors[i].second.z());
+		Normal normal = Normal((float) pointvectors[i].second.x(), (float) pointvectors[i].second.y(), (float) pointvectors[i].second.z());
 		// correct normal orientation
-		ASSERT(!views.IsEmpty());
+		//ASSERT(!views.IsEmpty());
 		const Image& imageData = images[*pViews];
 		if (normal.dot(Cast<float>(imageData.camera.C)-point) < 0)
 			normal = -normal;
-		pointcloud.AddNormal(normal);
+		// You can't AddNormal.  You have to use stream placement.
+		((Normal&) *(pointcloud.NormalStream()+i*3)) = normal;
 	}
 
 	DEBUG_ULTIMATE("Estimate dense point cloud normals: %u normals (%s)", pointcloud.NumPoints(), TD_TIMER_GET_FMT().c_str());
@@ -3973,6 +3552,10 @@ bool MVS::ExportDepthDataRaw(const String& fileName, const String& imageFileName
 		return false;
 	}
 
+	constexpr size_t bufferSize = 65536;
+	__declspec(align(32)) char buffer[bufferSize]; // Can't be static, mt aware.
+	std::setvbuf(f, buffer, _IOFBF, bufferSize);
+
 	// write header
 	HeaderDepthDataRaw header;
 	header.name = HeaderDepthDataRaw::HeaderDepthDataRawName();
@@ -3989,44 +3572,44 @@ bool MVS::ExportDepthDataRaw(const String& fileName, const String& imageFileName
 		header.type |= HeaderDepthDataRaw::HAS_CONF;
 	if (!viewsMap.empty())
 		header.type |= HeaderDepthDataRaw::HAS_VIEWS;
-	fwrite(&header, sizeof(HeaderDepthDataRaw), 1, f);
+	_fwrite_nolock(&header, sizeof(HeaderDepthDataRaw), 1, f);
 
 	// write image file name
 	STATIC_ASSERT(sizeof(String::value_type) == sizeof(char));
 	const String FileName(MAKE_PATH_REL(Util::getFullPath(Util::getFilePath(fileName)), Util::getFullPath(imageFileName)));
 	const uint16_t nFileNameSize((uint16_t)FileName.length());
-	fwrite(&nFileNameSize, sizeof(uint16_t), 1, f);
-	fwrite(FileName.c_str(), sizeof(char), nFileNameSize, f);
+	_fwrite_nolock(&nFileNameSize, sizeof(uint16_t), 1, f);
+	_fwrite_nolock(FileName.c_str(), sizeof(char), nFileNameSize, f);
 
 	// write neighbor IDs
 	STATIC_ASSERT(sizeof(uint32_t) == sizeof(IIndex));
 	const uint32_t nIDs(IDs.size());
-	fwrite(&nIDs, sizeof(IIndex), 1, f);
-	fwrite(IDs.data(), sizeof(IIndex), nIDs, f);
+	_fwrite_nolock(&nIDs, sizeof(IIndex), 1, f);
+	_fwrite_nolock(IDs.data(), sizeof(IIndex), nIDs, f);
 
 	// write pose
 	STATIC_ASSERT(sizeof(double) == sizeof(REAL));
-	fwrite(K.val, sizeof(REAL), 9, f);
-	fwrite(R.val, sizeof(REAL), 9, f);
-	fwrite(C.ptr(), sizeof(REAL), 3, f);
+	_fwrite_nolock(K.val, sizeof(REAL), 9, f);
+	_fwrite_nolock(R.val, sizeof(REAL), 9, f);
+	_fwrite_nolock(C.ptr(), sizeof(REAL), 3, f);
 
 	// write depth-map
-	fwrite(depthMap.getData(), sizeof(float) * depthMap.area(), 1, f);
+	_fwrite_nolock(depthMap.getData(), sizeof(float) * depthMap.area(), 1, f);
 
 	// write normal-map
 	if ((header.type & HeaderDepthDataRaw::HAS_NORMAL) != 0)
-		fwrite(normalMap.getData(), sizeof(float)*3 * normalMap.area(), 1, f);
+		_fwrite_nolock(normalMap.getData(), sizeof(float)*3 * normalMap.area(), 1, f);
 
 	// write confidence-map
 	if ((header.type & HeaderDepthDataRaw::HAS_CONF) != 0)
-		fwrite(confMap.getData(), sizeof(float) * confMap.area(), 1, f);
+		_fwrite_nolock(confMap.getData(), sizeof(float) * confMap.area(), 1, f);
 
 	// write views-map
 	if ((header.type & HeaderDepthDataRaw::HAS_VIEWS) != 0)
-		fwrite(viewsMap.getData(), sizeof(uint8_t)*4 * viewsMap.area(), 1, f);
+		_fwrite_nolock(viewsMap.getData(), sizeof(uint8_t)*4 * viewsMap.area(), 1, f);
 
 	const bool bRet(ferror(f) == 0);
-	fclose(f);
+	_fclose_nolock(f);
 	return bRet;
 } // ExportDepthDataRaw
 
@@ -4042,9 +3625,14 @@ bool MVS::ImportDepthDataRaw(const String& fileName, String& imageFileName,
 		return false;
 	}
 
+	constexpr size_t bufferSize = 65536;
+	__declspec(align(32)) char buffer[bufferSize]; // Can't be static, mt aware.
+
+	std::setvbuf(f, buffer, _IOFBF, bufferSize);
+
 	// read header
 	HeaderDepthDataRaw header;
-	if (fread(&header, sizeof(HeaderDepthDataRaw), 1, f) != 1 ||
+	if (_fread_nolock(&header, sizeof(HeaderDepthDataRaw), 1, f) != 1 ||
 		header.name != HeaderDepthDataRaw::HeaderDepthDataRawName() ||
 		(header.type & HeaderDepthDataRaw::HAS_DEPTH) == 0 ||
 		header.depthWidth <= 0 || header.depthHeight <= 0 ||
@@ -4057,23 +3645,23 @@ bool MVS::ImportDepthDataRaw(const String& fileName, String& imageFileName,
 	// read image file name
 	STATIC_ASSERT(sizeof(String::value_type) == sizeof(char));
 	uint16_t nFileNameSize;
-	fread(&nFileNameSize, sizeof(uint16_t), 1, f);
+	_fread_nolock(&nFileNameSize, sizeof(uint16_t), 1, f);
 	imageFileName.resize(nFileNameSize);
-	fread(imageFileName.data(), sizeof(char), nFileNameSize, f);
+	_fread_nolock(imageFileName.data(), sizeof(char), nFileNameSize, f);
 
 	// read neighbor IDs
 	STATIC_ASSERT(sizeof(uint32_t) == sizeof(IIndex));
 	uint32_t nIDs;
-	fread(&nIDs, sizeof(IIndex), 1, f);
+	_fread_nolock(&nIDs, sizeof(IIndex), 1, f);
 	ASSERT(nIDs > 0 && nIDs < 256);
 	IDs.resize(nIDs);
-	fread(IDs.data(), sizeof(IIndex), nIDs, f);
+	_fread_nolock(IDs.data(), sizeof(IIndex), nIDs, f);
 
 	// read pose
 	STATIC_ASSERT(sizeof(double) == sizeof(REAL));
-	fread(K.val, sizeof(REAL), 9, f);
-	fread(R.val, sizeof(REAL), 9, f);
-	fread(C.ptr(), sizeof(REAL), 3, f);
+	_fread_nolock(K.val, sizeof(REAL), 9, f);
+	_fread_nolock(R.val, sizeof(REAL), 9, f);
+	_fread_nolock(C.ptr(), sizeof(REAL), 3, f);
 
 	// read depth-map
 	dMin = header.dMin;
@@ -4082,18 +3670,18 @@ bool MVS::ImportDepthDataRaw(const String& fileName, String& imageFileName,
 	imageSize.height = header.imageHeight;
 	if ((flags & HeaderDepthDataRaw::HAS_DEPTH) != 0) {
 		depthMap.create(header.depthHeight, header.depthWidth);
-		fread(depthMap.getData(), sizeof(float) * depthMap.area(), 1, f);
+		_fread_nolock(depthMap.getData(), sizeof(float) * depthMap.area(), 1, f);
 	} else {
-		fseek(f, sizeof(float)*header.depthWidth*header.depthHeight, SEEK_CUR);
+		_fseek_nolock(f, sizeof(float)*header.depthWidth*header.depthHeight, SEEK_CUR);
 	}
 
 	// read normal-map
 	if ((header.type & HeaderDepthDataRaw::HAS_NORMAL) != 0) {
 		if ((flags & HeaderDepthDataRaw::HAS_NORMAL) != 0) {
 			normalMap.create(header.depthHeight, header.depthWidth);
-			fread(normalMap.getData(), sizeof(float)*3 * normalMap.area(), 1, f);
+			_fread_nolock(normalMap.getData(), sizeof(float)*3 * normalMap.area(), 1, f);
 		} else {
-			fseek(f, sizeof(float)*3*header.depthWidth*header.depthHeight, SEEK_CUR);
+			_fseek_nolock(f, sizeof(float)*3*header.depthWidth*header.depthHeight, SEEK_CUR);
 		}
 	}
 
@@ -4101,9 +3689,9 @@ bool MVS::ImportDepthDataRaw(const String& fileName, String& imageFileName,
 	if ((header.type & HeaderDepthDataRaw::HAS_CONF) != 0) {
 		if ((flags & HeaderDepthDataRaw::HAS_CONF) != 0) {
 			confMap.create(header.depthHeight, header.depthWidth);
-			fread(confMap.getData(), sizeof(float)* confMap.area(), 1, f);
+			_fread_nolock(confMap.getData(), sizeof(float)* confMap.area(), 1, f);
 		} else {
-			fseek(f, sizeof(float)*header.depthWidth*header.depthHeight, SEEK_CUR);
+			_fseek_nolock(f, sizeof(float)*header.depthWidth*header.depthHeight, SEEK_CUR);
 		}
 	}
 
@@ -4111,12 +3699,12 @@ bool MVS::ImportDepthDataRaw(const String& fileName, String& imageFileName,
 	if ((header.type & HeaderDepthDataRaw::HAS_VIEWS) != 0) {
 		if ((flags & HeaderDepthDataRaw::HAS_VIEWS) != 0) {
 			viewsMap.create(header.depthHeight, header.depthWidth);
-			fread(viewsMap.getData(), sizeof(uint8_t)*4, viewsMap.area(), f);
+			_fread_nolock(viewsMap.getData(), sizeof(uint8_t)*4, viewsMap.area(), f);
 		}
 	}
 
 	const bool bRet(ferror(f) == 0);
-	fclose(f);
+	_fclose_nolock(f);
 	return bRet;
 } // ImportDepthDataRaw
 /*----------------------------------------------------------------*/

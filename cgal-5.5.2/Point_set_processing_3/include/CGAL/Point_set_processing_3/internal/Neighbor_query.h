@@ -157,10 +157,11 @@ public:
       // output first). Search may be aborted if k is greater
       // than number of input points.
 
-      Neighbor_search search (m_tree, query, k+1, 0, true, m_distance);
+      const int localK = k+1;
+      Neighbor_search search (m_tree, query, localK, 0, true, m_distance);
       Search_iterator search_iterator = search.begin();
       unsigned int i;
-      for (i = 0; i < (k+1); ++ i)
+      for (i = 0; i < localK; ++ i)
       {
         if(search_iterator == search.end())
           break; // premature ending

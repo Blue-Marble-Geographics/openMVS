@@ -583,6 +583,10 @@ bool Scene::Load(const String& fileName, bool bImport)
 	#ifdef _USE_BOOST
 	// open the input stream
 	std::ifstream fs(fileName, std::ios::in | std::ios::binary);
+		constexpr size_t bufferSize = 65536;
+	__declspec(align(32)) char buffer[bufferSize]; // Can't be static, mt aware.
+	fs.rdbuf()->pubsetbuf(buffer, bufferSize);
+
 	if (!fs.is_open())
 		return false;
 	// load project header ID
@@ -648,6 +652,9 @@ bool Scene::Save(const String& fileName, ARCHIVE_TYPE type) const
 	#ifdef _USE_BOOST
 	// open the output stream
 	std::ofstream fs(fileName, std::ios::out | std::ios::binary);
+		constexpr size_t bufferSize = 65536;
+	__declspec(align(32)) char buffer[bufferSize]; // Can't be static, mt aware.
+	fs.rdbuf()->pubsetbuf(buffer, bufferSize);
 	if (!fs.is_open())
 		return false;
 	// save project ID

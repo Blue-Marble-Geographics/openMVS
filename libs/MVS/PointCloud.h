@@ -160,7 +160,7 @@ public:
 	void AddViews(T first, T last)
 	{
 		size_t cnt = last-first;
-		pointViewsSizes.push_back(cnt);
+		pointViewsSizes.push_back((uint32_t) cnt);
 		pointViewsOffsets.push_back((uint32_t) pointViewsMemory.size());
 
 		while (cnt-- > 0) {
@@ -180,7 +180,7 @@ public:
 	void AddWeights(T first, T last)
 	{
 		size_t cnt = last-first;
-		pointWeightsSizes.push_back(cnt);
+		pointWeightsSizes.push_back((uint32_t) cnt);
 		pointWeightsOffsets.push_back((uint32_t) pointWeightsMemory.size());
 
 		while (cnt-- > 0) {

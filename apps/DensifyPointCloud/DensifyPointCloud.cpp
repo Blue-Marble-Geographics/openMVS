@@ -71,7 +71,7 @@ boost::program_options::variables_map vm;
 } // namespace OPT
 
 // Used for testing.
-#define FORCIBLY_DISABLE_CUDA
+#undef FORCIBLY_DISABLE_CUDA
 
 #ifndef _USE_CUDA
 int unused;
@@ -119,7 +119,7 @@ bool Initialize(size_t argc, LPCTSTR* argv)
 	const unsigned numIters(4);
 	#else
 	const unsigned nNumViewsDefault(5);
-	const unsigned numIters(3);
+	const unsigned numIters(DPC_NUM_ITERS);
 	#endif
 #endif
 	unsigned nResolutionLevel;

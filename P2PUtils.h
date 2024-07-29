@@ -66,6 +66,7 @@
 #define _SetZero _mm_setzero_ps
 // JPB WIP BUG Using MSVC 17.6.4, _mm_set_ss doesn't always keep the
 // other registers clear.
+// Update: This appears to be fixed as of 17.8.4.
 // https://developercommunity.visualstudio.com/t/1923282002-_mm_set_ss-does-not-zero/949051?space=8&q=refactor+top-level
 // This should be retested
 #define _SetFirstUnsafe _mm_set_ss

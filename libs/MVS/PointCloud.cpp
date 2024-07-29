@@ -805,9 +805,21 @@ bool PointCloudStreaming::Save(const String& fileName, bool bLegacyTypes) const
 	ASSERT(!fileName.IsEmpty());
 	Util::ensureFolder(fileName);
 	PLY ply;
+
 	if (bLegacyTypes)
 		ply.set_legacy_type_names();
-	if (!ply.write(fileName, 1, BasicPLY::elem_names, PLY::BINARY_LE, 64*1024))
+
+	// Make a better guess at the final size...
+	// Always binary.
+	size_t guessedSize = 0;
+	if (!normalsXYZ.empty()) {
+		guessedSize += sizeof(float)*3*NumPoints();
+	}
+	guessedSize += sizeof(float)*3*NumPoints(); // vertices
+	guessedSize += sizeof(uint8_t)*3*NumPoints(); // colors
+	guessedSize += 64*1024; // From before, far too large, but should cover all headers.
+
+	if (!ply.write(fileName, 1, BasicPLY::elem_names, PLY::BINARY_LE, guessedSize))
 		return false;
 
 	if (normalsXYZ.empty()) {

@@ -23,6 +23,7 @@
 #include <CGAL/Spatial_searching/internal/Search_helpers.h>
 
 #include <iterator> // for std::distance
+#include <boost/container/small_vector.hpp>
 
 namespace CGAL {
 
@@ -42,7 +43,7 @@ private:
   typename SearchTraits::Cartesian_const_iterator_d query_object_it;
 
   internal::Distance_helper<Distance, SearchTraits> m_distance_helper;
-  std::vector<FT> dists;
+  boost::container::small_vector<FT, 3> dists;
   int m_dim;
   Tree const& m_tree;
 
@@ -67,11 +68,11 @@ public:
 
     FT distance_to_root;
     if (this->search_nearest){
-      distance_to_root = this->distance_instance.min_distance_to_rectangle(q, tree.bounding_box(),dists);
+      distance_to_root = this->distance_instance.min_distance_to_rectangle(q, tree.bounding_box(),&dists[0]);
       compute_nearest_neighbors_orthogonally(tree.root(), distance_to_root);
     }
     else {
-      distance_to_root = this->distance_instance.max_distance_to_rectangle(q, tree.bounding_box(),dists);
+      distance_to_root = this->distance_instance.max_distance_to_rectangle(q, tree.bounding_box(),&dists[0]);
       compute_furthest_neighbors_orthogonally(tree.root(), distance_to_root);
     }
 
@@ -85,9 +86,11 @@ private:
     typename Tree::iterator it_node_point = node->begin(), it_node_point_end = node->end();
     typename std::vector<FT>::const_iterator cache_point_begin = m_tree.cache_begin() + m_dim*(it_node_point - m_tree.begin());
     // As long as the queue is not full, the node is just inserted
+
+    int numVisited = 0;
     for (; !this->queue.full() && it_node_point != it_node_point_end; ++it_node_point)
     {
-      this->number_of_items_visited++;
+      ++numVisited;
 
       FT distance_to_query_object =
         m_distance_helper.transformed_distance_from_coordinates(
@@ -101,7 +104,7 @@ private:
     FT worst_dist = this->queue.top().second;
     for (; it_node_point != it_node_point_end; ++it_node_point)
     {
-      this->number_of_items_visited++;
+      ++numVisited;
 
       FT distance_to_query_object =
         m_distance_helper.interruptible_transformed_distance(
@@ -115,6 +118,8 @@ private:
 
       cache_point_begin += m_dim;
     }
+
+    this->number_of_items_visited += numVisited;
   }
 
   // Without cache
@@ -154,7 +159,7 @@ private:
     if (N->is_leaf())
     {
       // n is a leaf
-      typename Tree::Leaf_node_const_handle node =
+      typename Tree::Leaf_node_const_handle __restrict node =
         static_cast<typename Tree::Leaf_node_const_handle>(N);
       this->number_of_leaf_nodes_visited++;
       if (node->size() > 0)
@@ -165,7 +170,7 @@ private:
     }
     else
     {
-      typename Tree::Internal_node_const_handle node =
+      typename Tree::Internal_node_const_handle __restrict node =
         static_cast<typename Tree::Internal_node_const_handle>(N);
       this->number_of_internal_nodes_visited++;
       int new_cut_dim = node->cutting_dimension();

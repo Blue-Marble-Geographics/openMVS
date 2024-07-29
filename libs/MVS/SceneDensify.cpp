@@ -538,7 +538,7 @@ bool DepthMapsData::InitDepthMap(DepthData& depthData)
 } // InitDepthMap
 /*----------------------------------------------------------------*/
 
-#ifdef DPC_EXTENDED_OMP_THREADING
+#ifdef DPC_EXTENDED_OMP_THREADING2
 // initialize the confidence map (NCC score map) with the score of the current estimates
 void* STCALL DepthMapsData::ScoreDepthMapTmp(cList<DepthEstimator>& estimators)
 {
@@ -552,7 +552,7 @@ void* STCALL DepthMapsData::ScoreDepthMapTmp(cList<DepthEstimator>& estimators)
 #endif
 
 	if (anEstimator.sh.mLowResDepthMapEmpty) {
-#pragma omp parallel for num_threads(estimators.GetSize()) schedule(guided)
+#pragma omp parallel for num_threads((int) estimators.GetSize())
 		for (__int64 i = 0; i < idxCount; ++i) {
 			DepthEstimator& pe = estimators[omp_get_thread_num()];
 
@@ -566,7 +566,7 @@ void* STCALL DepthMapsData::ScoreDepthMapTmp(cList<DepthEstimator>& estimators)
 			}
 			Depth& depth = pe.depthMap0.pix(x);
 			Normal& normal = pe.normalMap0.pix(x);
-			const Normal viewDir(Cast<float>(static_cast<const Point3&>( pe.X0 )));
+			const Normal viewDir(_AsArray(pe.vX0, 0), _AsArray(pe.vX0, 1), _AsArray(pe.vX0, 2)); // Cast<float>(static_cast<const Point3&>(pe.X0)));
 			if (!ISINSIDE(depth, pe.dMin, pe.dMax)) {
 				// init with random values
 				depth = pe.RandomDepth(pe.rnd, pe.dMinSqr, pe.dMaxSqr);
@@ -583,7 +583,7 @@ void* STCALL DepthMapsData::ScoreDepthMapTmp(cList<DepthEstimator>& estimators)
 		}
 	}
 	else {
-#pragma omp parallel for num_threads(estimators.GetSize()) schedule(guided)
+#pragma omp parallel for num_threads((int) estimators.GetSize())
 		for (__int64 i = 0; i < idxCount; ++i) {
 			DepthEstimator& pe = estimators[omp_get_thread_num()];
 
@@ -597,7 +597,7 @@ void* STCALL DepthMapsData::ScoreDepthMapTmp(cList<DepthEstimator>& estimators)
 			}
 			Depth& depth = pe.depthMap0.pix(x);
 			Normal& normal = pe.normalMap0.pix(x);
-			const Normal viewDir(Cast<float>(static_cast<const Point3&>( pe.X0 )));
+			const Normal viewDir(_AsArray(pe.vX0, 0), _AsArray(pe.vX0, 1), _AsArray(pe.vX0, 2)); // Cast<float>(static_cast<const Point3&>(pe.X0)));
 			if (!ISINSIDE(depth, pe.dMin, pe.dMax)) {
 				// init with random values
 				depth = pe.RandomDepth(pe.rnd, pe.dMinSqr, pe.dMaxSqr);
@@ -656,7 +656,7 @@ void* STCALL DepthMapsData::ScoreDepthMapTmp(void* arg)
 	}
 	return NULL;
 }
-#endif // DPC_EXTENDED_OMP_THREADING
+#endif // DPC_EXTENDED_OMP_THREADING2
 
 #ifdef DPC_EXTENDED_OMP_THREADING
 // run propagation and random refinement cycles
@@ -722,7 +722,7 @@ void* STCALL DepthMapsData::EndDepthMapTmp(cList<DepthEstimator>& estimators)
 {
 	const DepthEstimator& anEstimator = estimators.First();
 	const __int64 cnt = anEstimator.coords.GetSize();
-#pragma omp parallel for num_threads(estimators.GetSize()) schedule(guided)
+#pragma omp parallel for num_threads((int) estimators.GetSize()) schedule(guided)
 	for (__int64 i = 0; i < cnt; ++i) {
 		const ImageRef& x = anEstimator.coords[i];
 		//ASSERT(estimator.depthMap0(x) >= 0);
@@ -925,8 +925,9 @@ bool DepthMapsData::EstimateDepthMap(IIndex idxImage, int nGeometricIter)
 		ASSERT(depthData.images.size() > 1);
 
 #ifdef DPC_FASTER_SAMPLING
+		const int numImages = (int) depthData.images.size();
 #pragma omp parallel for num_threads(nMaxThreads)
-		for (int j = 0; j < depthData.images.size(); ++j) {
+		for (int j = 0; j < numImages; ++j) {
 			auto& i = depthData.images[j];
 			sCachedImagesMutex.lock();
 			auto itPair = sCachedImages.try_emplace(ImageKey_t(i.pImageData->ID, scale, i.image.cols, i.image.rows));
@@ -1012,7 +1013,7 @@ bool DepthMapsData::EstimateDepthMap(IIndex idxImage, int nGeometricIter)
 				estimators.Last().lowResDepthMap = currentSizeResDepthMap;
 				estimators.Last().sh.mLowResDepthMapEmpty = estimators.Last().lowResDepthMap.empty();
 			}
-#ifdef DPC_EXTENDED_OMP_THREADING
+#ifdef DPC_EXTENDED_OMP_THREADING2
 			ScoreDepthMapTmp(estimators);
 #else
 			FOREACH(i, threads)
@@ -1432,12 +1433,13 @@ bool DepthMapsData::FilterDepthMap(DepthData& depthDataRef, const IIndexArr& idx
 		const Camera& camera = depthData.images.First().camera;
 		const Image8U::Size size(depthData.depthMap.size());
 		for (int i=0; i<size.height; ++i) {
+			const Depth* const __restrict pDepth = &depthData.depthMap(i, 0);
 			for (int j=0; j<size.width; ++j) {
-				const ImageRef x(j,i);
-				const Depth depth(depthData.depthMap(x));
+				const Depth depth(pDepth[j]);
 				if (depth == 0)
 					continue;
 				ASSERT(depth > 0);
+				const ImageRef x(j,i);
 				const Point3 X(camera.TransformPointI2W(Point3(x.x,x.y,depth)));
 				const Point3 camX(cameraRef.TransformPointW2C(X));
 				if (camX.z <= 0)
@@ -1462,16 +1464,19 @@ bool DepthMapsData::FilterDepthMap(DepthData& depthDataRef, const IIndexArr& idx
 					ImageRef(CEIL2INT(imgX.x), FLOOR2INT(imgX.y)),
 					ImageRef(CEIL2INT(imgX.x), CEIL2INT(imgX.y))
 				};
+
 				for (int p=0; p<4; ++p) {
 					const ImageRef& xRef = xRefs[p];
-					if (!depthMap.isInside(xRef))
-						continue;
+					if ((unsigned) xRef.x < size.width && (unsigned) xRef.y < size.height) {
+						//if (!depthMap.isInside(xRef))
+						//	continue;
 					Depth& depthRef(depthMap(xRef));
 					if (depthRef != 0 && depthRef < (Depth)camX.z)
 						continue;
 					depthRef = (Depth)camX.z;
 					if (bAdjust)
 						confMap(xRef) = depthData.confMap(x);
+				}
 				}
 				#endif
 			}
@@ -1725,7 +1730,7 @@ void DepthMapsData::MergeDepthMaps(PointCloudStreaming& pointcloud, bool bEstima
 		}
 		depthData.DecRef();
 		++nDepthMaps;
-		ASSERT(pointcloud.points.size() == pointcloud.pointViews.size());
+		//ASSERT(pointcloud.points.size() == pointcloud.pointViews.size());
 		DEBUG_ULTIMATE("Depths map for reference image %3u merged using %u depths maps: %u new points (%s)",
 			idxImage, depthData.images.size()-1, (pointcloud.NumPoints())-nNumPointsPrev, TD_TIMER_GET_FMT().c_str());
 		progress.display(idxImage+1);
