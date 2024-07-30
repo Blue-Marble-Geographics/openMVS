@@ -88,7 +88,12 @@ public:
 			pScene->octMesh.Swap(octMesh);
 		} else
 		if (!scene.pointcloud.IsEmpty()) {
-			Scene::OctreePoints octPoints(scene.pointcloud.points, [](Scene::OctreePoints::IDX_TYPE size, Scene::OctreePoints::Type /*radius*/) {
+			const size_t numPoints = scene.pointcloud.NumPoints();
+			std::vector<Point3f> converted(numPoints);
+			for (size_t i = 0; i < numPoints; ++i) {
+				converted[i] = scene.pointcloud.Point(i);
+			}
+			Scene::OctreePoints octPoints(converted, [](Scene::OctreePoints::IDX_TYPE size, Scene::OctreePoints::Type /*radius*/) {
 				return size > 512;
 			});
 			pScene->octPoints.Swap(octPoints);
@@ -237,9 +242,10 @@ bool Scene::Open(LPCTSTR fileName, LPCTSTR meshFileName)
 		// load given mesh
 		scene.mesh.Load(meshFileName);
 	}
+#if 0 // JPB WIP BUG Unsupported
 	if (!scene.pointcloud.IsEmpty())
 		scene.pointcloud.PrintStatistics(scene.images.data(), &scene.obb);
-
+#endif
 	#if 1
 	// create octree structure used to accelerate selection functionality
 	if (!scene.IsEmpty())
@@ -400,6 +406,9 @@ bool Scene::Export(LPCTSTR _fileName, LPCTSTR exportType) const
 
 void Scene::CompilePointCloud()
 {
+#if 1 // JPB WIP BUG
+	throw std::runtime_error("Unsupported");
+#else
 	if (scene.pointcloud.IsEmpty())
 		return;
 	ReleasePointCloud();
@@ -425,6 +434,7 @@ void Scene::CompilePointCloud()
 		glEnd();
 	}
 	glEndList();
+#endif
 }
 
 void Scene::CompileMesh()
@@ -488,6 +498,9 @@ void Scene::CompileBounds()
 
 void Scene::Draw()
 {
+#if 1 // JPB WIP BUG
+	throw std::runtime_error("Unsupported");
+#else
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	glPointSize(window.pointSize);
 
@@ -660,6 +673,7 @@ void Scene::Draw()
 		glDepthMask(GL_TRUE);
 	}
 	glfwSwapBuffers(window.GetWindow());
+#endif
 }
 
 void Scene::Loop()
@@ -752,10 +766,11 @@ void Scene::CastRay(const Ray3& ray, int action)
 		// find ray intersection with the points
 		const MVS::IntersectRayPoints intRay(octPoints, ray, scene.pointcloud, window.minViews);
 		if (intRay.pick.IsValid()) {
-			window.selectionPoints[0] = window.selectionPoints[3] = scene.pointcloud.points[intRay.pick.idx];
+			window.selectionPoints[0] = window.selectionPoints[3] = scene.pointcloud.Point(intRay.pick.idx);
 			window.selectionType = Window::SEL_POINT;
 			window.selectionTime = now;
 			window.selectionIdx = intRay.pick.idx;
+#if 0 // JPB WIP BUG
 			DEBUG("Point selected:\n\tindex: %u (%g %g %g)%s",
 				intRay.pick.idx,
 				window.selectionPoints[0].x, window.selectionPoints[0].y, window.selectionPoints[0].z,
@@ -773,6 +788,7 @@ void Scene::CastRay(const Ray3& ray, int action)
 					return strViews;
 				}().c_str()
 			);
+#endif
 		} else {
 			window.selectionType = Window::SEL_NA;
 		}

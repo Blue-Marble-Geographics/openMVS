@@ -382,7 +382,7 @@ void PLY::put_element(const void* elem_ptr)
 		/* write an ascii file */
 
 		/* write out each property of the element */
-		for (size_t j = 0; j < elem->props.size(); ++j) {
+		for (size_t j = 0, cnt = elem->props.size(); j < cnt; ++j) {
 
 			PlyProperty *prop = elem->props[j];
 
@@ -431,7 +431,7 @@ void PLY::put_element(const void* elem_ptr)
 		/* write a binary file */
 
 		/* write out each property of the element */
-		for (size_t j = 0; j < elem->props.size(); ++j) {
+		for (size_t j = 0, cnt = elem->props.size(); j < cnt; ++j) {
 			PlyProperty *prop = elem->props[j];
 			if (elem->store_prop[j] == OTHER_PROP)
 				elem_data = *other_ptr;
@@ -1409,7 +1409,7 @@ val        - item value to be written
 double_val - value type
 type       - data type to write out
 ******************************************************************************/
-
+#if 0
 void PLY::write_binary_item(
 	const ValueType& val,
 	int from_type,
@@ -1453,7 +1453,7 @@ void PLY::write_binary_item(
 		abort_ply("error: write_binary_item: bad type = %d", to_type);
 	}
 }
-
+#endif
 
 /******************************************************************************
 Write out an item to a file as ascii characters.
@@ -1503,6 +1503,7 @@ Exit:
 val        - extracted value
 ******************************************************************************/
 
+#if 0
 void PLY::get_stored_item(
 	void *ptr,
 	int type,
@@ -1538,6 +1539,7 @@ void PLY::get_stored_item(
 		abort_ply("error: get_stored_item: bad type = %d", type);
 	}
 }
+#endif
 
 
 /******************************************************************************

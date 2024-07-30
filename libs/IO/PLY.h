@@ -147,6 +147,7 @@ protected:
 			uint32_t u32;
 			float f;
 			double d;
+			uint8_t data[8];
 		};
 	};
 
@@ -222,12 +223,34 @@ protected:
 	typedef SEACAVE::TokenInputStream<false> STRISTREAM;
 	char **get_words(STRISTREAM&, int *, char **);
 
+	static constexpr int BytesToCopy[]{
+			0, // StartType = 0,
+			1, // Int8      = 1,
+			2, // Int16     = 2,
+			4, // Int32     = 3,
+			1, // Uint8     = 4,
+			2, // Uint16    = 5,
+			4, // Uint32    = 6,
+			4, // Float32   = 7,
+			8 // Float64   = 8,
+	};
+
 	/* write an item to a file */
-	void write_binary_item(const ValueType&, int, int);
+	_forceinline void write_binary_item(
+		const ValueType& val,
+		int from_type,
+		int to_type
+	)
+	{
+		f->write(val.data, BytesToCopy[to_type]);
+	}
 	void write_ascii_item(const ValueType&, int, int);
 
 	/* return the value of a stored item */
-	void get_stored_item(void*, int, ValueType&);
+	__forceinline void get_stored_item(void* ptr, int type, ValueType& val)
+	{
+		__movsb(val.data, (BYTE*) ptr, BytesToCopy[type]);
+	}
 
 	/* get binary or ascii item and store it according to ptr and type */
 	void get_binary_item(SEACAVE::ISTREAM*, int, ValueType&);

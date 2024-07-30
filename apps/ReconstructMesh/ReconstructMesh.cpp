@@ -419,7 +419,7 @@ int main(int argc, LPCTSTR* argv)
 			// reconstruct a coarse mesh from the given point-cloud
 			TD_TIMER_START();
 			if (OPT::bUseConstantWeight)
-				scene.pointcloud.pointWeights.Release();
+				scene.pointcloud.ReleaseWeights();
 			if (!scene.ReconstructMesh(OPT::fDistInsert, OPT::bUseFreeSpaceSupport, OPT::bUseOnlyROI, 4, OPT::fThicknessFactor, OPT::fQualityFactor))
 				return EXIT_FAILURE;
 			VERBOSE("Mesh reconstruction completed: %u vertices, %u faces (%s)", scene.mesh.vertices.GetSize(), scene.mesh.faces.GetSize(), TD_TIMER_GET_FMT().c_str());

@@ -529,6 +529,9 @@ CLISTDEF0IDX(SemiGlobalMatcher::AccumCost,int) SemiGlobalMatcher::GenerateP2s(Ac
 //    can be 0 to force the standard SGM algorithm
 void SemiGlobalMatcher::Match(const Scene& scene, IIndex idxImage, IIndex numNeighbors, unsigned minResolution)
 {
+#if 1 // JPB WIP BUG Must be restored
+	throw std::runtime_error("Unsupported"); 
+#else
 	const Image& leftImage = scene.images[idxImage];
 	const float fMinScore(MAXF(leftImage.neighbors.front().score*OPTDENSE::fViewMinScoreRatio, OPTDENSE::fViewMinScore));
 	FOREACH(idxNeighbor, leftImage.neighbors) {
@@ -734,6 +737,7 @@ void SemiGlobalMatcher::Match(const Scene& scene, IIndex idxImage, IIndex numNei
 		ExportDepthDataRaw(pairName+".dmap", leftImage.name, IIndexArr{leftImage.ID,rightImage.ID}, leftImage.GetSize(), leftImage.camera.K, leftImage.camera.R, leftImage.camera.C, 0, FLT_MAX, depthMap, NormalMap(), confMap);
 		#endif
 	}
+#endif
 }
 
 void SemiGlobalMatcher::Fuse(const Scene& scene, IIndex idxImage, IIndex numNeighbors, unsigned minViews, DepthMap& depthMap, ConfidenceMap& confMap)
@@ -921,28 +925,30 @@ void SemiGlobalMatcher::Match(const ViewData& leftImage, const ViewData& rightIm
 		const ImageRef u(c+halfWindowSizeX,r+halfWindowSizeY);
 		// initialize pixel patch weights
 		WeightedPatch w;
-		w.normSq0 = 0;
-		w.sumWeights = 0;
+		WeightedPatchInfo wpi;
+		wpi.normSq0 = 0;
+		float sumWeights = 0.f;
 		int n = 0;
+#if 0 // JPB WIP BUG Precision
 		const Pixel8U& colCenter = leftImage.imageColor(u);
 		for (int i=-halfWindowSizeY; i<=halfWindowSizeY; ++i) {
 			for (int j=-halfWindowSizeX; j<=halfWindowSizeX; ++j) {
 				const ImageRef x(u.x+j,u.y+i);
-				WeightedPatch::Pixel& pw = w.weights[n++];
-				w.normSq0 +=
-					(pw.tempWeight = leftImage.imageGray(x)) *
-					(pw.weight = EXP(Compute::WeightColor(leftImage.imageColor, colCenter, x)+Compute::WeightSpatial(j,i)));
-				w.sumWeights += pw.weight;
+				wpi.normSq0 +=
+					(w.pixelTempWeights[n] = leftImage.imageGray(x)) *
+					(w.pixelWeights[n] = EXP(Compute::WeightColor(leftImage.imageColor, colCenter, x)+Compute::WeightSpatial(j,i)));
+				sumWeights += w.pixelWeights[n];
+				++n;
 			}
 		}
 		ASSERT(n == numTexels);
-		const float tm(w.normSq0/w.sumWeights);
-		w.normSq0 = 0;
+		wpi.sumWeights = sumWeights;
+		const float tm(wpi.normSq0/wpi.sumWeights);
+		wpi.normSq0 = 0;
 		n = 0;
 		do {
-			WeightedPatch::Pixel& pw = w.weights[n];
-			const float t(pw.tempWeight - tm);
-			w.normSq0 += (pw.tempWeight = pw.weight * t) * t;
+			const float t(w.pixelTempWeights[n] - tm);
+			wpi.normSq0 += (w.pixelTempWeights[n] = w.pixelWeights[n] * t) * t;
 		} while (++n < numTexels);
 		// compute pixel cost
 		Cost* costs = imageCosts.data()+pixel.idx;
@@ -956,20 +962,22 @@ void SemiGlobalMatcher::Match(const ViewData& leftImage, const ViewData& rightIm
 						goto NEXT_COST;
 					}
 					const float f(rightImage.imageGray(x));
-					const WeightedPatch::Pixel& pw = w.weights[n++];
-					const float fw(f*pw.weight);
+					const float fw(f*w.pixelWeights[n]);
 					sum += fw;
 					sumSq += f*fw;
-					nom += f*pw.tempWeight;
+					nom += f*w.pixelTempWeights[n];
+					++n;
 				}
 			}
 			{
-			const float normSq1(sumSq-SQUARE(sum)/w.sumWeights);
-			const float ncc(nom/SQRT(w.normSq0*normSq1+eps));
+			const float normSq1(sumSq-SQUARE(sum)/wpi.sumWeights);
+			const float ncc(nom/SQRT(wpi.normSq0*normSq1+eps));
 			*costs++ = (ncc <= 0 ? Cost(255) : (Cost)ROUND2INT((1.f-MINF(ncc,1.f))*255.f));
 			}
 			NEXT_COST:;
 		}
+#endif
+
 		#endif
 	};
 	ASSERT(threads.IsEmpty());

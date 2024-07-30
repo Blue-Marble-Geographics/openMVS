@@ -165,6 +165,8 @@ namespace cv { namespace gpu = cuda; }
 
 // D E F I N E S ///////////////////////////////////////////////////
 
+#define _FAST_FLOAT2INT // JPB Wrong in configuration?
+
 // In order to create a singleton class
 // add this define in your class;
 #define DECLARE_SINGLETON(SClass) \
@@ -1378,7 +1380,7 @@ public:
 	inline TPoint3(const EVec& rhs) { operator EVec& () = rhs; }
 	#endif
 	explicit inline TPoint3(const TYPE& _x) : Base(_x,_x,_x) {}
-	inline TPoint3(const TYPE& _x, const TYPE& _y, const TYPE& _z) : Base(_x,_y,_z) {}
+	__forceinline TPoint3(const TYPE& _x, const TYPE& _y, const TYPE& _z) : Base(_x,_y,_z) {}
 	template <typename T> inline TPoint3(const cv::Point_<T>& pt, const T& _z=T(1)) : Base(pt.x,pt.y,_z) {}
 	template <typename T1, typename T2> inline TPoint3(const cv::Point_<T1>& pt, const T2& _z) : Base(pt.x,pt.y,_z) {}
 
@@ -2202,6 +2204,21 @@ public:
 	bool Load(const String&);
 	bool Save(const String&) const;
 	void Show(const String& winname, int delay=0, bool bDestroy=true) const;
+
+	__forceinline TYPE& pix(const ImageRef& pt)
+	{
+		return ((TYPE*)(data + step.p[0] * pt.y))[pt.x];
+	}
+
+	__forceinline const TYPE& pix(const ImageRef& pt) const
+	{
+		return ((const TYPE*)(data + step.p[0] * pt.y))[pt.x];
+	}
+
+	__forceinline const TYPE& pix(int index) const
+	{
+		return ((const TYPE*)(data))[index];
+	}
 
 	#ifdef _USE_BOOST
 	// serialize

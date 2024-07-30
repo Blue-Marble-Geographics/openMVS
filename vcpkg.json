@@ -19,8 +19,9 @@
     "libpng",
     "opencv",
 	"opengl",
+    "tbb",
     "tiff",
-    "vcglib",
+	"vcglib",
     "zlib"
   ],
   "features": {

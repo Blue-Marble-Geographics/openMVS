@@ -36,7 +36,7 @@
 
 using namespace MVS;
 
-
+#if 0 // JPB WIP BUG Unsupported
 // D E F I N E S ///////////////////////////////////////////////////
 
 #define APPNAME _T("InterfaceMetashape") // previously PhotoScan
@@ -773,8 +773,12 @@ void AssignPoints(const Image& imageData, uint32_t ID, PointCloud& pointcloud)
 
 } // unnamed namespace
 
+#endif
 int main(int argc, LPCTSTR* argv)
 {
+#if 1 // JPB WIP BUG
+	throw std::runtime_error("Unsupported");
+#else
 	#ifdef _DEBUGINFO
 	// set _crtBreakAlloc index to stop in <dbgheap.c> at allocation
 	_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);// | _CRTDBG_CHECK_ALWAYS_DF);
@@ -853,6 +857,7 @@ int main(int argc, LPCTSTR* argv)
 			TD_TIMER_GET_FMT().c_str());
 
 	Finalize();
+#endif
 	return EXIT_SUCCESS;
 }
 /*----------------------------------------------------------------*/

@@ -771,6 +771,8 @@ bool Scene::ReconstructMesh(float distInsert, bool bUseFreeSpaceSupport, bool bU
 							float kInf
 )
 {
+	PointCloud pcOriginal = PointCloud(pointcloud);
+
 	using namespace DELAUNAY;
 	ASSERT(!pointcloud.IsEmpty());
 	mesh.Release();
@@ -783,13 +785,13 @@ bool Scene::ReconstructMesh(float distInsert, bool bUseFreeSpaceSupport, bool bU
 	{
 		TD_TIMER_STARTD();
 
-		std::vector<point_t> vertices(pointcloud.points.GetSize());
-		std::vector<std::ptrdiff_t> indices(pointcloud.points.GetSize());
+		std::vector<point_t> vertices(pcOriginal.points.GetSize());
+		std::vector<std::ptrdiff_t> indices(pcOriginal.points.GetSize());
 		// fetch points
 		if (bUseOnlyROI && !IsBounded())
 			bUseOnlyROI = false;
-		FOREACH(i, pointcloud.points) {
-			const PointCloud::Point& X(pointcloud.points[i]);
+		FOREACH(i, pcOriginal.points) {
+			const PointCloud::Point& X(pcOriginal.points[i]);
 			if (bUseOnlyROI && !obb.Intersects(X))
 				continue;
 			vertices[i] = point_t(X.x, X.y, X.z);
@@ -806,8 +808,8 @@ bool Scene::ReconstructMesh(float distInsert, bool bUseFreeSpaceSupport, bool bU
 		int li, lj;
 		std::for_each(indices.cbegin(), indices.cend(), [&](size_t idx) {
 			const point_t& p = vertices[idx];
-			const PointCloud::Point& point = pointcloud.points[idx];
-			const PointCloud::ViewArr& views = pointcloud.pointViews[idx];
+			const PointCloud::Point& point = pcOriginal.points[idx];
+			const PointCloud::ViewArr& views = pcOriginal.pointViews[idx];
 			ASSERT(!views.IsEmpty());
 			if (hint == vertex_handle_t()) {
 				// this is the first point,
@@ -869,11 +871,11 @@ bool Scene::ReconstructMesh(float distInsert, bool bUseFreeSpaceSupport, bool bU
 				}
 			}
 			// update point visibility info
-			hint->info().InsertViews(pointcloud, idx);
+			hint->info().InsertViews(pcOriginal, idx);
 			++progress;
 		});
 		progress.close();
-		pointcloud.Release();
+		pcOriginal.Release();
 		// init cells weights and
 		// loop over all cells and store the finite facet of the infinite cells
 		const size_t numNodes(delaunay.number_of_cells());

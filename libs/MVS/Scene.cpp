@@ -37,7 +37,6 @@
 
 using namespace MVS;
 
-
 // D E F I N E S ///////////////////////////////////////////////////
 
 #define PROJECT_ID "MVS\0" // identifies the project stream
@@ -161,40 +160,77 @@ bool Scene::LoadInterface(const String & fileName)
 	// import 3D points
 	if (!obj.vertices.empty()) {
 		bool bValidWeights(false);
-		pointcloud.points.Resize(obj.vertices.size());
-		pointcloud.pointViews.Resize(obj.vertices.size());
-		pointcloud.pointWeights.Resize(obj.vertices.size());
-		FOREACH(i, pointcloud.points) {
+
+		const int numObjVertices = (int)obj.vertices.size();
+		pointcloud.ReservePoints(numObjVertices);
+
+		// obj has numObjVertices
+		// Each vertex is a Vertex which contains the point "X" and view array (an array of IDX).
+		pointcloud.ReservePointViewsSizeAndOffset(numObjVertices);
+		pointcloud.ReservePointWeightsSizeAndOffset(numObjVertices);
+
+		// Calculate the amount of space needed to store the point views and weights in a flat array.
+		size_t numFlatArrayItems = 0;
+		for (const auto& i : obj.vertices) {
+			numFlatArrayItems += i.views.size();
+		}
+
+		pointcloud.ReservePointViewsMemory(numFlatArrayItems);
+		pointcloud.ReservePointWeightsMemory(numFlatArrayItems);
+
+		std::vector<PointCloud::ViewArr::IDX> indices;
+		std::vector<PointCloud::ViewArr::IDX> mappedViews;
+		std::vector<float> mappedWeights;
+
+		size_t offset = 0;
+		for (int i = 0, cnt = numObjVertices; i < cnt; ++i) {
 			const Interface::Vertex& vertex = obj.vertices[i];
-			PointCloud::Point& point = pointcloud.points[i];
-			point = vertex.X;
-			PointCloud::ViewArr& views = pointcloud.pointViews[i];
-			views.Resize((PointCloud::ViewArr::IDX)vertex.views.size());
-			PointCloud::WeightArr& weights = pointcloud.pointWeights[i];
-			weights.Resize((PointCloud::ViewArr::IDX)vertex.views.size());
-			CLISTDEF0(PointCloud::ViewArr::IDX) indices(views.GetSize());
-			std::iota(indices.Begin(), indices.End(), 0);
-			std::sort(indices.Begin(), indices.End(), [&](IndexArr::Type i0, IndexArr::Type i1) -> bool {
+
+			pointcloud.AddPoint(vertex.X);
+
+			const size_t numViewsForPoint = vertex.views.size();
+			indices.clear();
+			indices.resize(numViewsForPoint);
+			std::iota(std::begin(indices), std::end(indices), 0);
+			std::sort(std::begin(indices), std::end(indices), [&](IndexArr::Type i0, IndexArr::Type i1) -> bool {
 				return vertex.views[i0].imageID < vertex.views[i1].imageID;
 			});
 			ASSERT(vertex.views.size() >= 2);
-			views.ForEach([&](PointCloud::ViewArr::IDX v) {
-				const Interface::Vertex::View& view = vertex.views[indices[v]];
-				views[v] = view.imageID;
-				weights[v] = view.confidence;
-				if (view.confidence != 0)
+
+			mappedViews.clear();
+			mappedViews.resize(numViewsForPoint);
+			mappedWeights.clear();
+			mappedWeights.resize(numViewsForPoint);
+
+			for (int j = 0; j < numViewsForPoint; ++j) {
+				const auto idx = indices[j];
+				mappedViews[j] = vertex.views[idx].imageID;
+				mappedWeights[j] = vertex.views[idx].confidence;
+				if (mappedWeights[j] != 0) {
 					bValidWeights = true;
-			});
+				}
+			}
+
+			pointcloud.AddViews(std::begin(mappedViews), std::end(mappedViews));
+			pointcloud.AddWeights(std::begin(mappedWeights), std::end(mappedWeights));
 		}
-		if (!bValidWeights)
-			pointcloud.pointWeights.Release();
+
+		if (!bValidWeights) {
+			pointcloud.ClearWeights();
+		}
 		if (!obj.verticesNormal.empty()) {
 			ASSERT(obj.vertices.size() == obj.verticesNormal.size());
-			pointcloud.normals.CopyOf((const Point3f*)&obj.verticesNormal[0].n, obj.vertices.size());
+			pointcloud.ReserveNormals(numObjVertices);
+			for (int i = 0; i < numObjVertices; ++i) {
+				pointcloud.AddNormal(obj.verticesNormal[i].n);
+			}
 		}
 		if (!obj.verticesColor.empty()) {
 			ASSERT(obj.vertices.size() == obj.verticesColor.size());
-			pointcloud.colors.CopyOf((const Pixel8U*)&obj.verticesColor[0].c, obj.vertices.size());
+			pointcloud.ReserveColors(numObjVertices);
+			for (int i = 0; i < numObjVertices; ++i) {
+				pointcloud.AddColor(&obj.verticesColor[i].c.x);
+			}
 		}
 	}
 
@@ -206,12 +242,13 @@ bool Scene::LoadInterface(const String & fileName)
 				"\t%u points, %u vertices, %u faces",
 				TD_TIMER_GET_FMT().c_str(),
 				images.GetSize(), nCalibratedImages, (double)nTotalPixels/(1024.0*1024.0), (double)nTotalPixels/(1024.0*1024.0*nCalibratedImages),
-				pointcloud.points.GetSize(), mesh.vertices.GetSize(), mesh.faces.GetSize());
+				pointcloud.NumPoints(), mesh.vertices.GetSize(), mesh.faces.GetSize());
 	return true;
 } // LoadInterface
 
 bool Scene::SaveInterface(const String & fileName, int version) const
 {
+	// JPB WIP BUG TODO
 	TD_TIMER_STARTD();
 	Interface obj;
 
@@ -257,32 +294,39 @@ bool Scene::SaveInterface(const String & fileName, int version) const
 	}
 
 	// export 3D points
-	obj.vertices.resize(pointcloud.points.GetSize());
-	FOREACH(i, pointcloud.points) {
-		const PointCloud::Point& point = pointcloud.points[i];
-		const PointCloud::ViewArr& views = pointcloud.pointViews[i];
+	const size_t numPoints = pointcloud.NumPoints();
+	obj.vertices.resize(numPoints);
+	const float* pPoints = pointcloud.PointStream();
+	for (size_t i = 0; i < numPoints; ++i, pPoints += 3) {
+		const PointCloud::Point& point = (PointCloud::Point&)pPoints;
 		MVS::Interface::Vertex& vertex = obj.vertices[i];
 		ASSERT(sizeof(vertex.X.x) == sizeof(point.x));
 		vertex.X = point;
-		vertex.views.resize(views.GetSize());
-		views.ForEach([&](PointCloud::ViewArr::IDX v) {
-			MVS::Interface::Vertex::View& view = vertex.views[v];
-			view.imageID = views[v];
-			view.confidence = (pointcloud.pointWeights.IsEmpty() ? 0.f : pointcloud.pointWeights[i][v]);
-		});
+
+		const uint32_t* pViews = pointcloud.ViewsStream(i);
+		const float* pWeights = pointcloud.WeightsStream(i);
+		const size_t numViews = pointcloud.ViewsStreamSize(i);
+		vertex.views.resize(numViews);
+		for (size_t j = 0; j < numViews; ++j) {
+			MVS::Interface::Vertex::View& view = vertex.views[j];
+			view.imageID = pViews[j];
+			view.confidence = pWeights ? pWeights[j] : 0.f;
+		};
 	}
-	if (!pointcloud.normals.IsEmpty()) {
-		obj.verticesNormal.resize(pointcloud.normals.GetSize());
-		FOREACH(i, pointcloud.normals) {
-			const PointCloud::Normal& normal = pointcloud.normals[i];
+	if (const float* pNormals = pointcloud.NormalStream()) {
+		const size_t numNormals = pointcloud.NumPoints();
+		obj.verticesNormal.resize(numNormals);
+		for (size_t i = 0; i < numNormals; ++i, pNormals += 3) {
+			const PointCloud::Normal& normal = (PointCloud::Normal&) pNormals;
 			MVS::Interface::Normal& vertexNormal = obj.verticesNormal[i];
 			vertexNormal.n = normal;
 		}
 	}
-	if (!pointcloud.colors.IsEmpty()) {
-		obj.verticesColor.resize(pointcloud.colors.GetSize());
-		FOREACH(i, pointcloud.colors) {
-			const PointCloud::Color& color = pointcloud.colors[i];
+	if (const uint8_t* pColors = pointcloud.ColorStream()) {
+		const size_t numColors = pointcloud.NumPoints();
+		obj.verticesColor.resize(numColors);
+		for (size_t i = 0; i < numColors; ++i, pColors += 3) {
+			const PointCloud::Color& color = (PointCloud::Color&) pColors;
 			MVS::Interface::Color& vertexColor = obj.verticesColor[i];
 			vertexColor.c = color;
 		}
@@ -302,7 +346,7 @@ bool Scene::SaveInterface(const String & fileName, int version) const
 				"\t%u points, %u vertices, %u faces",
 				TD_TIMER_GET_FMT().c_str(),
 				images.GetSize(), nCalibratedImages,
-				pointcloud.points.GetSize(), mesh.vertices.GetSize(), mesh.faces.GetSize());
+				pointcloud.NumPoints(), mesh.vertices.GetSize(), mesh.faces.GetSize());
 	return true;
 } // SaveInterface
 /*----------------------------------------------------------------*/
@@ -354,25 +398,41 @@ bool Scene::LoadDMAP(const String& fileName)
 
 	// create point-cloud
 	camera.K = camera.GetScaledK(imageSize, depthMap.size());
-	pointcloud.points.reserve(depthMap.area());
-	pointcloud.pointViews.reserve(depthMap.area());
-	pointcloud.colors.reserve(depthMap.area());
+	
+	pointcloud.Release();
+
+	const size_t numPixels = depthMap.area();
+	pointcloud.ReservePoints(numPixels);
+	pointcloud.ReserveColors(numPixels);
+
 	if (!normalMap.empty())
-		pointcloud.normals.reserve(depthMap.area());
-	if (!confMap.empty())
-		pointcloud.pointWeights.reserve(depthMap.area());
+		pointcloud.ReserveNormals(numPixels);
+	if (!confMap.empty()) {
+		pointcloud.ReservePointWeightsSizeAndOffset(numPixels);
+		pointcloud.ReservePointWeightsMemory(numPixels);
+	}
+
+	size_t idx = 0;
 	for (int r=0; r<depthMap.rows; ++r) {
 		for (int c=0; c<depthMap.cols; ++c) {
 			const Depth depth = depthMap(r,c);
 			if (depth <= 0)
 				continue;
-			pointcloud.points.emplace_back(camera.TransformPointI2W(Point3(c,r,depth)));
-			pointcloud.pointViews.emplace_back(PointCloud::ViewArr{0});
-			pointcloud.colors.emplace_back(imageColor(r,c));
-			if (!normalMap.empty())
-				pointcloud.normals.emplace_back(Cast<PointCloud::Normal::Type>(camera.R.t()*Cast<REAL>(normalMap(r,c))));
-			if (!confMap.empty())
-				pointcloud.pointWeights.emplace_back(PointCloud::WeightArr{confMap(r,c)});
+
+			const auto& pt = camera.TransformPointI2W(Point3(c, r, depth));
+			pointcloud.AddPoint(pt);
+
+			const auto& color = imageColor(r, c);
+			pointcloud.AddColor(color);
+
+			if (!normalMap.empty()) {
+				const auto normal = Cast<PointCloud::Normal::Type>(camera.R.t()*Cast<REAL>(normalMap(r, c)));
+				pointcloud.AddNormal(normal);
+			}
+			if (!confMap.empty()) {
+				const auto& conf = confMap(r, c);
+				pointcloud.AddWeight(confMap(r, c));
+			}
 		}
 	}
 
@@ -523,6 +583,10 @@ bool Scene::Load(const String& fileName, bool bImport)
 	#ifdef _USE_BOOST
 	// open the input stream
 	std::ifstream fs(fileName, std::ios::in | std::ios::binary);
+		constexpr size_t bufferSize = 65536;
+	__declspec(align(32)) char buffer[bufferSize]; // Can't be static, mt aware.
+	fs.rdbuf()->pubsetbuf(buffer, bufferSize);
+
 	if (!fs.is_open())
 		return false;
 	// load project header ID
@@ -569,7 +633,7 @@ bool Scene::Load(const String& fileName, bool bImport)
 				"\t%u points, %u vertices, %u faces",
 				TD_TIMER_GET_FMT().c_str(),
 				images.GetSize(), nCalibratedImages, (double)nTotalPixels/(1024.0*1024.0), (double)nTotalPixels/(1024.0*1024.0*nCalibratedImages),
-				pointcloud.points.GetSize(), mesh.vertices.GetSize(), mesh.faces.GetSize());
+				pointcloud.NumPoints(), mesh.vertices.GetSize(), mesh.faces.GetSize());
 	return true;
 	#else
 	return false;
@@ -588,6 +652,9 @@ bool Scene::Save(const String& fileName, ARCHIVE_TYPE type) const
 	#ifdef _USE_BOOST
 	// open the output stream
 	std::ofstream fs(fileName, std::ios::out | std::ios::binary);
+		constexpr size_t bufferSize = 65536;
+	__declspec(align(32)) char buffer[bufferSize]; // Can't be static, mt aware.
+	fs.rdbuf()->pubsetbuf(buffer, bufferSize);
 	if (!fs.is_open())
 		return false;
 	// save project ID
@@ -609,7 +676,7 @@ bool Scene::Save(const String& fileName, ARCHIVE_TYPE type) const
 				"\t%u points, %u vertices, %u faces",
 				TD_TIMER_GET_FMT().c_str(),
 				images.GetSize(), nCalibratedImages,
-				pointcloud.points.GetSize(), mesh.vertices.GetSize(), mesh.faces.GetSize());
+				pointcloud.NumPoints(), mesh.vertices.GetSize(), mesh.faces.GetSize());
 	return true;
 	#else
 	return false;
@@ -621,11 +688,12 @@ bool Scene::Save(const String& fileName, ARCHIVE_TYPE type) const
 // compute point-cloud with visibility info from the existing mesh
 void Scene::SampleMeshWithVisibility(unsigned maxResolution)
 {
+	PointCloud tmp;
+
 	ASSERT(!mesh.IsEmpty());
 	const Depth thFrontDepth(0.985f);
-	pointcloud.Release();
-	pointcloud.points.resize(mesh.vertices.size());
-	pointcloud.pointViews.resize(mesh.vertices.size());
+	tmp.points.resize(mesh.vertices.size());
+	tmp.pointViews.resize(mesh.vertices.size());
 	#ifdef SCENE_USE_OPENMP
 	#pragma omp parallel for
 	for (int64_t _ID=0; _ID<images.size(); ++_ID) {
@@ -650,18 +718,20 @@ void Scene::SampleMeshWithVisibility(unsigned maxResolution)
 				#ifdef SCENE_USE_OPENMP
 				#pragma omp critical
 				#endif
-				pointcloud.pointViews[idxVertex].emplace_back(ID);
+				tmp.pointViews[idxVertex].emplace_back(ID);
 			}
 		}
 	}
-	RFOREACH(idx, pointcloud.points) {
-		if (pointcloud.pointViews[idx].size() < 2) {
-			pointcloud.RemovePoint(idx);
+	RFOREACH(idx, tmp.points) {
+		if (tmp.pointViews[idx].size() < 2) {
+			tmp.RemovePoint(idx);
 			continue;
 		}
-		pointcloud.points[idx] = mesh.vertices[(Mesh::VIndex)idx];
-		pointcloud.pointViews[idx].Sort();
+		tmp.points[idx] = mesh.vertices[(Mesh::VIndex)idx];
+		tmp.pointViews[idx].Sort();
 	}
+
+	pointcloud = tmp;
 } // SampleMeshWithVisibility
 /*----------------------------------------------------------------*/
 
@@ -744,17 +814,34 @@ bool Scene::EstimateNeighborViewsPointCloud(unsigned maxResolution)
 				const Depth depthPerturb(randomRange(minDepthPerturb, maxDepthPerturb));
 				const Point3 X(imageData.camera.TransformPointI2W(Point3(x.x, x.y, depthPerturb)));
 				const Point3 X2(imageData2.camera.TransformPointW2C(X));
-				if (X2.z < 0)
+
+				if (X2.z < 0) {
 					continue;
+				}
 				const Point2f x2(imageData2.camera.TransformPointC2I(X2));
-				if (!Image8U::isInside(x2, imageData2.GetSize()))
+				if (!Image8U::isInside(x2, imageData2.GetSize())) {
 					continue;
-				pointcloud.points.emplace_back(X);
-				pointcloud.pointViews.emplace_back(idI < idJ ? PointCloud::ViewArr{idI, idJ} : PointCloud::ViewArr{idJ, idI});
+				}
+				pointcloud.AddPoint(X);
+
+				if (idI < idJ) {
+					IDX views[] ={ idI, idJ };
+					pointcloud.AddViews(&views[0], &views[0]+2);
+				} else {
+					IDX views[] ={ idJ, idI };
+					pointcloud.AddViews(&views[0], &views[0]+2);
+				}
 			}
 		}
 	};
 	pointcloud.Release();
+
+	const size_t maxPoints = (((size_t)maxResolution) * maxResolution)*images.size();
+	pointcloud.ReservePoints(maxPoints);
+
+	pointcloud.ReservePointViewsSizeAndOffset(maxPoints);
+	pointcloud.ReservePointViewsMemory(maxPoints*2);
+
 	FOREACH(i, images) {
 		const Image& imageData = images[i];
 		if (!imageData.IsValid())
@@ -820,12 +907,23 @@ bool Scene::SelectNeighborViews(uint32_t ID, IndexArr& points, unsigned nMinView
 	const float sigmaAngleSmall(-1.f/(2.f*SQUARE(fOptimAngle*0.38f)));
 	const float sigmaAngleLarge(-1.f/(2.f*SQUARE(fOptimAngle*0.7f)));
 	const bool bCheckInsideROI(nInsideROI > 0 && IsBounded());
-	FOREACH(idx, pointcloud.points) {
-		const PointCloud::ViewArr& views = pointcloud.pointViews[idx];
-		ASSERT(views.IsSorted());
-		if (views.FindFirst(ID) == PointCloud::ViewArr::NO_INDEX)
-			continue;
-		const PointCloud::Point& point = pointcloud.points[idx];
+
+	const size_t numPoints = pointcloud.NumPoints();
+	for (size_t idx = 0; idx < numPoints; ++idx) {
+		const auto* viewStream = pointcloud.ViewsStream(idx);
+		const size_t numViews = pointcloud.ViewsStreamSize(idx);
+
+		//ASSERT(views.IsSorted());
+		for (size_t j = 0; j < numViews; ++j) {
+			if (viewStream[j] == ID) {
+				// found
+				goto found;
+			}
+		}
+		continue;
+
+found:
+		const PointCloud::Point& point = (PointCloud::Point&)(pointcloud.PointStream()[idx*3]);
 		float wROI(1.f);
 		if (bCheckInsideROI && !obb.Intersects(point)) {
 			if (nInsideROI > 1)
@@ -837,17 +935,20 @@ bool Scene::SelectNeighborViews(uint32_t ID, IndexArr& points, unsigned nMinView
 		if (depth <= 0)
 			continue;
 		// store this point
-		if (views.size() >= nMinPointViews)
+		if (numViews >= nMinPointViews)
 			points.push_back((uint32_t)idx);
 		imageData.avgDepth += depth;
 		++nPoints;
 		// score shared views
 		const Point3f V1(imageData.camera.C - Cast<REAL>(point));
 		const float footprint1(Footprint(imageData.camera, point));
-		for (const PointCloud::View& view: views) {
-			if (view == ID)
+
+
+		for (size_t j = 0; j < numViews; ++j) {
+			if (viewStream[j] == ID)
 				continue;
-			const Image& imageData2 = images[view];
+			const auto viewIDX = viewStream[j];
+			const Image& imageData2 = images[viewIDX];
 			const Point3f V2(imageData2.camera.C - Cast<REAL>(point));
 			const float fAngle(ACOS(ComputeAngle(V1.ptr(), V2.ptr())));
 			const float wAngle(EXP(SQUARE(fAngle-fOptimAngle)*(fAngle<fOptimAngle?sigmaAngleSmall:sigmaAngleLarge)));
@@ -860,7 +961,7 @@ bool Scene::SelectNeighborViews(uint32_t ID, IndexArr& points, unsigned nMinView
 				wScale = 1.f;
 			else
 				wScale = SQUARE(fScaleRatio);
-			Score& score = scores[view];
+			Score& score = scores[viewIDX];
 			score.score += MAXF(wAngle,0.1f) * wScale * wROI;
 			score.avgScale += fScaleRatio;
 			score.avgAngle += fAngle;
@@ -885,12 +986,23 @@ bool Scene::SelectNeighborViews(uint32_t ID, IndexArr& points, unsigned nMinView
 		const Point2f boundsB(imageDataB.GetSize());
 		ASSERT(projs.empty());
 		for (uint32_t idx: points) {
-			const PointCloud::ViewArr& views = pointcloud.pointViews[idx];
-			ASSERT(views.IsSorted());
-			ASSERT(views.FindFirst(ID) != PointCloud::ViewArr::NO_INDEX);
-			if (views.FindFirst(IDB) == PointCloud::ViewArr::NO_INDEX)
-				continue;
-			const PointCloud::Point& point = pointcloud.points[idx];
+			const auto* viewStream = pointcloud.ViewsStream(idx);
+			const size_t numViews = pointcloud.ViewsStreamSize(idx);
+
+			//ASSERT(views.IsSorted());
+			//ASSERT(views.FindFirst(ID) != PointCloud::ViewArr::NO_INDEX);
+			//if (views.FindFirst(IDB) == PointCloud::ViewArr::NO_INDEX)
+			//	continue;
+			for (size_t j = 0; j < numViews; ++j) {
+				if (viewStream[j] == IDB) {
+					// found
+					goto found2;
+				}
+			}
+			continue;
+
+		found2:
+			const PointCloud::Point& point = (PointCloud::Point&)(pointcloud.PointStream()[idx*3]);
 			Point2f& ptA = projs.emplace_back(imageData.camera.ProjectPointP(point));
 			Point2f ptB = imageDataB.camera.ProjectPointP(point);
 			if (!imageData.camera.IsInside(ptA, boundsA) || !imageDataB.camera.IsInside(ptB, boundsB))
@@ -1027,6 +1139,10 @@ bool Scene::ExportCamerasMLP(const String& fileName, const String& fileNameScene
 //    per sub-scene in order to allow all images to be loaded and processed during mesh refinement
 unsigned Scene::Split(ImagesChunkArr& chunks, float maxArea, int depthMapStep) const
 {
+#if 1 // JPB WIP BUG
+		throw std::runtime_error("Unsupported");
+		return 0;
+#else
 	TD_TIMER_STARTD();
 	// gather samples from all depth-maps
 	const float areaScale(0.01f);
@@ -1073,7 +1189,7 @@ unsigned Scene::Split(ImagesChunkArr& chunks, float maxArea, int depthMapStep) c
 			// dump box for visualization
 			OBB3f::POINT pts[8];
 			obbSamples.GetCorners(pts);
-			PointCloud pc;
+			PointCloudStreaming pc;
 			for (int i=0; i<8; ++i)
 				pc.points.emplace_back(pts[i]);
 			pc.Save(MAKE_PATH("scene_obb.ply"));
@@ -1254,11 +1370,16 @@ unsigned Scene::Split(ImagesChunkArr& chunks, float maxArea, int depthMapStep) c
 	}
 	#endif
 	return chunks.size();
+#endif
 } // Split
 
 // split the scene in sub-scenes according to the given chunks array, and save them to disk
 bool Scene::ExportChunks(const ImagesChunkArr& chunks, const String& path, ARCHIVE_TYPE type) const
 {
+#if 1 // JPB WIP BUG
+		throw std::runtime_error("Unsupported");
+		return 0;
+#else
 	FOREACH(chunkID, chunks) {
 		const ImagesChunk& chunk = chunks[chunkID];
 		Scene subset;
@@ -1342,6 +1463,7 @@ bool Scene::ExportChunks(const ImagesChunkArr& chunks, const String& path, ARCHI
 		if (!subset.Save(String::FormatString("%s" PATH_SEPARATOR_STR "scene_%04u.mvs", path.c_str(), chunkID), type))
 			return false;
 	}
+#endif
 	return true;
 } // ExportChunks
 /*----------------------------------------------------------------*/
@@ -1371,8 +1493,11 @@ bool Scene::Center(const Point3* pCenter)
 	for (Image& image: images)
 		if (image.IsValid())
 			image.UpdateCamera(platforms);
-	for (PointCloud::Point& X: pointcloud.points)
-		X += centerf;
+	const size_t numPoints = pointcloud.NumPoints();
+	const Point3f centerAsFloat(*pCenter);
+	for (size_t i = 0; i < numPoints; ++i) {
+		((Point3f&)pointcloud.PointStream()[i*3]) += centerAsFloat;
+	}
 	for (Mesh::Vertex& X: mesh.vertices)
 		X += centerf;
 	return true;
@@ -1402,8 +1527,11 @@ bool Scene::Scale(const REAL* pScale)
 	for (Image& image: images)
 		if (image.IsValid())
 			image.UpdateCamera(platforms);
-	for (PointCloud::Point& X: pointcloud.points)
-		X *= scalef;
+
+	const size_t numPoints = pointcloud.NumPoints();
+	for (size_t i = 0; i < numPoints; ++i) {
+		((Point3f&)pointcloud.PointStream()[i*3]) *= scalef;
+	}
 	for (Mesh::Vertex& X: mesh.vertices)
 		X *= scalef;
 	return true;
@@ -1451,10 +1579,10 @@ void Scene::Transform(const Matrix3x3& rotation, const Point3& translation, REAL
 	for (Image& image : images) {
 		image.UpdateCamera(platforms);
 	}
-	FOREACH(i, pointcloud.points) {
-		pointcloud.points[i] = rotationScale * Cast<REAL>(pointcloud.points[i]) + translation;
-		if (!pointcloud.normals.empty())
-			pointcloud.normals[i] = rotation * Cast<REAL>(pointcloud.normals[i]);
+	for (size_t i = 0, cnt = pointcloud.NumPoints(); i < cnt; ++i) {
+		pointcloud.Point(i) = rotationScale * Cast<REAL>(pointcloud.Point(i)) + translation;
+		if (pointcloud.NormalStream())
+			pointcloud.Normal(i) = rotation * Cast<REAL>(pointcloud.Normal(i));
 	}
 	FOREACH(i, mesh.vertices) {
 		mesh.vertices[i] = rotationScale * Cast<REAL>(mesh.vertices[i]) + translation;
@@ -1599,11 +1727,14 @@ bool Scene::EstimateROI(int nEstimateROI, float scale)
 	DEBUG_ULTIMATE("The estimated scene center is (%f,%f,%f), radius is %f",
 				   sceneCenter.x, sceneCenter.y, sceneCenter.z, sceneRadius);
 	Point3fArr ptsInROI;
-	FOREACH(i, pointcloud.points) {
-		const PointCloud::Point& point = pointcloud.points[i];
-		const PointCloud::ViewArr& views = pointcloud.pointViews[i];
-		FOREACH(j, views) {
-			const Image& imageData = images[views[j]];
+
+	const size_t numPoints = pointcloud.NumPoints();
+	for (size_t i = 0; i < numPoints; ++i) {
+		const PointCloud::Point& point = (PointCloud::Point&) pointcloud.PointStream()[i*3];
+		const size_t numViews = pointcloud.ViewsStreamSize(i);
+		const auto* pViews = pointcloud.ViewsStream(i);
+		for (size_t j = 0; j < numViews; ++j) {
+			const Image& imageData = images[pViews[j]];
 			if (!imageData.IsValid())
 				continue;
 			const Camera& camera = imageData.camera;
