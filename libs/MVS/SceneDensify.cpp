@@ -882,6 +882,20 @@ bool DepthMapsData::EstimateDepthMap(IIndex idxImage, int nGeometricIter)
 	_controlfp_s(NULL, _DN_FLUSH, _MCW_DN);
 #endif
 
+	static bool firstTime = true;
+	if (firstTime) {
+		bool usingGPU = false;
+#ifdef _USE_CUDA
+		usingGPU = pmCUDA;
+#endif
+		if (usingGPU) {
+			VERBOSE("Running patch-matching on a CUDA-enabled GPU.");
+		} else {
+			VERBOSE("Running patch-matching on the CPU.");
+		}
+		firstTime = false;
+	}
+
 	#ifdef _USE_CUDA
 	if (pmCUDA) {
 		pmCUDA->EstimateDepthMap(arrDepthData[idxImage]);
