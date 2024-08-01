@@ -101,7 +101,8 @@ void PatchMatchCUDA::Init(bool bGeomConsistency)
 		params.nEstimationIters = 1;
 	} else {
 		params.bGeomConsistency = false;
-		params.nEstimationIters = OPTDENSE::nEstimationIters;
+		// JPB WIP No good way to set this to correspond with the original setting.
+		params.nEstimationIters = 4; // OPTDENSE::nEstimationIters;
 	}
 }
 

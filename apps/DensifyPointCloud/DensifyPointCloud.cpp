@@ -109,6 +109,11 @@ bool Initialize(size_t argc, LPCTSTR* argv)
 		#endif
 		;
 
+	// Previously, the _USE_CUDA pathway set numIters to 4 by default.
+	// This has the effect of forcing the CPU to 4 patch-match iterations when
+	// CUDA use is compiled in AND CPU processing is enabled.
+	// Now we default both to DPC_NUM_ITERS (3) and the CUDA path
+	// will manually set this to 4 in CUDA-specific code.
 #ifdef FORCIBLY_DISABLE_CUDA
 	const unsigned nNumViewsDefault(5);
 	const unsigned numIters(DPC_NUM_ITERS);
@@ -116,7 +121,7 @@ bool Initialize(size_t argc, LPCTSTR* argv)
 	// group of options allowed both on command line and in config file
 	#ifdef _USE_CUDA
 	const unsigned nNumViewsDefault(8);
-	const unsigned numIters(4);
+	const unsigned numIters(DPC_NUM_ITERS);
 	#else
 	const unsigned nNumViewsDefault(5);
 	const unsigned numIters(DPC_NUM_ITERS);
