@@ -2234,7 +2234,7 @@ void DepthMapsData::FuseDepthMaps(PointCloudStreaming& pointcloud, bool bEstimat
 						ASSERT(ISEQUAL(norm(normalB), 1.f));
 						if (normal.dot(normalB) > normalError) {
 							// add view to the 3D point
-							ASSERT(views.FindFirst(idxImageB) == PointCloud::ViewArr::NO_INDEX);
+							//ASSERT(views.FindFirst(idxImageB) == PointCloud::ViewArr::NO_INDEX);
 							const float confidenceB(Conf2Weight(depthDataB.confMap.empty() ? 1.f : depthDataB.confMap.pix(xB),depthB));
 
 							// Uses binary search to determine index to insert to

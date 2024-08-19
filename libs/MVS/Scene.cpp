@@ -913,7 +913,7 @@ bool Scene::SelectNeighborViews(uint32_t ID, IndexArr& points, unsigned nMinView
 		const auto* viewStream = pointcloud.ViewsStream(idx);
 		const size_t numViews = pointcloud.ViewsStreamSize(idx);
 
-		//ASSERT(views.IsSorted());
+		ASSERT(std::is_sorted(viewStream, viewStream+numViews));
 		for (size_t j = 0; j < numViews; ++j) {
 			if (viewStream[j] == ID) {
 				// found
@@ -923,7 +923,7 @@ bool Scene::SelectNeighborViews(uint32_t ID, IndexArr& points, unsigned nMinView
 		continue;
 
 found:
-		const PointCloud::Point& point = (PointCloud::Point&)(pointcloud.PointStream()[idx*3]);
+		const PointCloud::Point& point = pointcloud.Point(idx);
 		float wROI(1.f);
 		if (bCheckInsideROI && !obb.Intersects(point)) {
 			if (nInsideROI > 1)
@@ -989,7 +989,7 @@ found:
 			const auto* viewStream = pointcloud.ViewsStream(idx);
 			const size_t numViews = pointcloud.ViewsStreamSize(idx);
 
-			//ASSERT(views.IsSorted());
+			ASSERT(std::is_sorted(viewStream, viewStream+numViews));
 			//ASSERT(views.FindFirst(ID) != PointCloud::ViewArr::NO_INDEX);
 			//if (views.FindFirst(IDB) == PointCloud::ViewArr::NO_INDEX)
 			//	continue;
@@ -1002,7 +1002,7 @@ found:
 			continue;
 
 		found2:
-			const PointCloud::Point& point = (PointCloud::Point&)(pointcloud.PointStream()[idx*3]);
+			const PointCloud::Point& point = pointcloud.Point(idx);
 			Point2f& ptA = projs.emplace_back(imageData.camera.ProjectPointP(point));
 			Point2f ptB = imageDataB.camera.ProjectPointP(point);
 			if (!imageData.camera.IsInside(ptA, boundsA) || !imageDataB.camera.IsInside(ptB, boundsB))
