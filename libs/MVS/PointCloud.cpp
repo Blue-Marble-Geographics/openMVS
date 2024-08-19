@@ -79,33 +79,20 @@ PointCloud::PointCloud(const PointCloudStreaming& pcs)
 		for (size_t j = 0; j < numPointViews; ++j) {
 			tmp.emplace_back(src[j]);
 		}
-#if 0
-		auto& pvArray = pointViews[i];
-		pvArray.Reserve(numPointViews);
-		for (size_t j = 0; j < numPointViews; ++j) {
-			pvArray.emplace_back(src[j]);
-		}
-#endif
 	}
 
-	// Point weights
-	pointWeights.Reserve(numPoints);
-	for (size_t i = 0; i < numPoints; ++i) {
-		const size_t numPointWeights = pcs.pointWeightsSizes[i];
-		const size_t offset = pcs.pointWeightsOffsets[i];
-		const float* src = pcs.pointWeightsMemory.data() + offset;
-		auto& tmp = pointWeights.emplace_back();
-		for (size_t j = 0; j < numPointWeights; ++j) {
-			tmp.emplace_back(src[j]);
+	// Point weights (may be null)
+	if (!pcs.pointWeightsMemory.empty()) {
+		pointWeights.Reserve(numPoints);
+		for (size_t i = 0; i < numPoints; ++i) {
+			const size_t numPointWeights = pcs.pointWeightsSizes[i];
+			const size_t offset = pcs.pointWeightsOffsets[i];
+			const float* src = pcs.pointWeightsMemory.data() + offset;
+			auto& tmp = pointWeights.emplace_back();
+			for (size_t j = 0; j < numPointWeights; ++j) {
+				tmp.emplace_back(src[j]);
+			}
 		}
-#if 0
-		pointWeights.emplace_back();
-		auto& pwArray = pointWeights[i];
-		pwArray.Reserve(numPointWeights);
-		for (size_t j = 0; j < numPointWeights; ++j) {
-			pwArray.emplace_back(src[j]);
-		}
-#endif
 	}
 }
 
@@ -772,8 +759,8 @@ bool PointCloudStreaming::Load(const String& fileName)
 				pPoints += 3;
 
 				pColors[0] = vertex.c.r;
-				pColors[1] = vertex.c.r;
-				pColors[2] = vertex.c.r;
+				pColors[1] = vertex.c.g;
+				pColors[2] = vertex.c.b;
 				pColors += srcColorOffset;
 
 				pNormals[0] = vertex.n.x;
