@@ -1573,9 +1573,12 @@ bool Mesh::SaveOBJ(const String& fileName) const
 		ObjModel::Group& group = model.AddGroup(_T("material_" + std::to_string(idxTexture)));
 		group.faces.reserve(faces.size());
 		FOREACH(idxFace, faces) {
-			const auto texIdx = faceTexindices[idxFace];
-			if (texIdx != idxTexture)
-			    continue;
+			if (!faceTexindices.IsEmpty())
+			{
+				const auto texIdx = faceTexindices[idxFace];
+				if (texIdx != idxTexture)
+					continue;
+			}
 
 			const Face& face = faces[idxFace];
 			ObjModel::Face f;
